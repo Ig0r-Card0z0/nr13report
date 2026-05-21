@@ -217,6 +217,7 @@ export class DatabaseService implements OnModuleInit {
     this.addColumnIfMissing('inspecoes', 'prox_hidro', 'TEXT');
     this.addColumnIfMissing('inspecoes', 'prazo_complementos', 'TEXT');
     this.addColumnIfMissing('clientes', 'profissional_id', 'TEXT REFERENCES profissionais(id) ON DELETE SET NULL');
+    this.addColumnIfMissing('clientes', 'logo_filename', 'TEXT');
     this.addColumnIfMissing('medicoes_espessura', 'instrumento_id', 'TEXT REFERENCES instrumentos_medicao(id) ON DELETE SET NULL');
 
     // Bootstrap inicial: para cada combinação distinta de (ph_nome, ph_crea)

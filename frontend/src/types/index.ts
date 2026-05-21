@@ -16,6 +16,7 @@ export interface Cliente {
   profissional_id?: string | null;
   profissional_nome?: string | null;
   profissional_crea?: string | null;
+  logo_filename?: string | null;
   total_equipamentos?: number;
   criado_em: string;
 }
