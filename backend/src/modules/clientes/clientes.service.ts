@@ -1,6 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from '../../database/database.service';
 import { v4 as uuidv4 } from 'uuid';
+import { existsSync, unlinkSync } from 'fs';
+import { join } from 'path';
 
 export interface CreateClienteDto {
   nome: string;
@@ -96,8 +98,49 @@ export class ClientesService {
 
   remove(id: string) {
     this.findOne(id);
+    // Remove o arquivo de logo do disco, se houver
+    const row = this.db.instance.prepare(
+      'SELECT logo_filename FROM clientes WHERE id = ?'
+    ).get(id) as any;
+    if (row?.logo_filename) this.apagarArquivo(row.logo_filename);
     this.db.instance.prepare('DELETE FROM clientes WHERE id = ?').run(id);
     return { deleted: true };
+  }
+
+  // ── Logo do cliente ────────────────────────────────────────────────────
+  private apagarArquivo(filename: string) {
+    try {
+      const p = join(process.cwd(), 'uploads', filename);
+      if (existsSync(p)) unlinkSync(p);
+    } catch {
+      // Falha ao apagar arquivo antigo não deve interromper a operação.
+    }
+  }
+
+  setLogo(id: string, file: Express.Multer.File) {
+    this.findOne(id);
+    // Remove o logo anterior, se existir, antes de gravar o novo
+    const row = this.db.instance.prepare(
+      'SELECT logo_filename FROM clientes WHERE id = ?'
+    ).get(id) as any;
+    if (row?.logo_filename) this.apagarArquivo(row.logo_filename);
+
+    this.db.instance.prepare(
+      `UPDATE clientes SET logo_filename = ?, atualizado_em = datetime('now') WHERE id = ?`
+    ).run(file.filename, id);
+    return this.findOne(id);
+  }
+
+  removeLogo(id: string) {
+    this.findOne(id);
+    const row = this.db.instance.prepare(
+      'SELECT logo_filename FROM clientes WHERE id = ?'
+    ).get(id) as any;
+    if (row?.logo_filename) this.apagarArquivo(row.logo_filename);
+    this.db.instance.prepare(
+      `UPDATE clientes SET logo_filename = NULL, atualizado_em = datetime('now') WHERE id = ?`
+    ).run(id);
+    return this.findOne(id);
   }
 
 }

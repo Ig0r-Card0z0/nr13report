@@ -27,6 +27,8 @@ const C = {
   branco:  '#FFFFFF',
   preto:   '#000000',
   cinzaT:  '#595959',
+  secaoBg:   '#F7F7F7', // fundo claro do cabeçalho de seção
+  secaoTxt:  '#595959', // texto de baixo contraste sobre fundo claro
 };
 
 // ─── Layout A4 (pontos) ───────────────────────────────────────────────────────
@@ -73,7 +75,8 @@ export class RelatoriosService {
              c.nome    AS cli_nome,  c.cnpj,        c.tel,   c.email,
              c.logradouro,           c.numero        AS cli_num,
              c.bairro,               c.cidade,       c.uf,
-             c.responsavel,          c.cargo
+             c.responsavel,          c.cargo,
+             c.logo_filename AS cli_logo
       FROM equipamentos e
       JOIN clientes c ON e.cliente_id = c.id
       WHERE e.id = ?
@@ -172,6 +175,48 @@ export class RelatoriosService {
         return { buffer: null, w: 4, h: 3, legenda, numero: f.numero };
       }
     }));
+
+    // Pré-processamento da foto de capa — feito AQUI, fora do executor da
+    // Promise de montagem do PDF (que é síncrono e não aceita await).
+    let capaPrep: { buffer: Buffer; w: number; h: number; legenda: string } | null = null;
+    if (fotoCapa?.filename) {
+      const capaPath = path.join(process.cwd(), 'uploads', fotoCapa.filename);
+      if (fs.existsSync(capaPath)) {
+        try {
+          const buffer = await sharp(capaPath).rotate().toBuffer();
+          const meta = await sharp(buffer).metadata();
+          capaPrep = {
+            buffer,
+            w: meta.width  || 4,
+            h: meta.height || 3,
+            legenda: fotoCapa.legenda || `Vista geral – ${eq.tag}`,
+          };
+        } catch {
+          capaPrep = null;
+        }
+      }
+    }
+
+    // Logo do cliente — pré-processado aqui pelo mesmo motivo (await).
+    // Aparece na capa quando o cliente tiver um logo cadastrado.
+    let clienteLogoPrep: { buffer: Buffer; w: number; h: number } | null = null;
+    if (eq.cli_logo) {
+      const logoPath = path.join(process.cwd(), 'uploads', eq.cli_logo);
+      if (fs.existsSync(logoPath)) {
+        try {
+          // Mantém transparência (PNG) — sem flatten, fundo fica vazado.
+          const buffer = await sharp(logoPath).rotate().toBuffer();
+          const meta = await sharp(buffer).metadata();
+          clienteLogoPrep = {
+            buffer,
+            w: meta.width  || 4,
+            h: meta.height || 3,
+          };
+        } catch {
+          clienteLogoPrep = null;
+        }
+      }
+    }
 
     // ── 3. Montar PDF ─────────────────────────────────────────────────────────
     const baseBuffer = await new Promise<Buffer>((resolve, reject) => {
@@ -275,14 +320,14 @@ export class RelatoriosService {
 
         // Linha laranja do rodapé
         doc.strokeColor(C.laranja).lineWidth(0.8)
-           .moveTo(ML, FTRY - 6).lineTo(ML + TW, FTRY - 6).stroke();
+           .moveTo(ML, FTRY - 14).lineTo(ML + TW, FTRY - 14).stroke();
 
-        // Texto do rodapé
-        doc.fillColor(C.cinzaT).font('Helvetica').fontSize(8)
+        // Texto do rodapé — linha única, title case, abaixo da linha laranja
+        doc.fillColor(C.cinzaT).font('Helvetica').fontSize(7)
            .text(
-             'NORT.END - ENGENHARIA E INSPEÇÃO  |  92 99387.6271  |  ENG.NORTEND@GMAIL.COM\n' +
+             'Nort.End - Engenharia e Inspeção  |  92 99387.6271  |  eng.nortend@gmail.com  |  ' +
              'CNPJ: 36.724.646/0001-69  |  CREA-AM: 041725365-6',
-             ML, FTRY - 18, { width: TW, align: 'center' },
+             ML, FTRY - 9, { width: TW, align: 'center', lineBreak: false },
            );
 
         doc.restore();
@@ -294,24 +339,43 @@ export class RelatoriosService {
 
       // ── Barra de seção ────────────────────────────────────────────────────
       const secao = (txt: string) => {
-        checar(30);
-        const bh = 26;
+        const label = txt.toUpperCase();
+        doc.font('Helvetica-Bold').fontSize(10);
+        // Altura ajustada ao texto: evita sobreposição em títulos longos
+        const txtH = doc.heightOfString(label, { width: TW - 16 });
+        const bh = Math.max(26, txtH + 14);
+        checar(bh + 6);
         doc.save()
-           .rect(ML, y, TW, bh).fill(C.azul)
+           .rect(ML, y, TW, bh).fill(C.secaoBg)
            .strokeColor(C.laranja).lineWidth(1.5)
            .moveTo(ML, y + bh).lineTo(ML + TW, y + bh).stroke()
            .restore();
-        doc.fillColor(C.branco).font('Helvetica-Bold').fontSize(10)
-           .text(txt.toUpperCase(), ML + 6, y + 8,
-                 { width: TW - 12, lineBreak: false });
-        y += bh + 4;
+        doc.fillColor(C.secaoTxt).font('Helvetica-Bold').fontSize(10)
+           .text(label, ML + 8, y + (bh - txtH) / 2,
+                 { width: TW - 16 });
+        y += bh + 6;
       };
 
       // ── Tabela label | valor (2 colunas por linha, 4 colunas totais) ──────
-      const kvRow = (pairs: [string, string][], rh = 24) => {
+      const kvRow = (pairs: [string, string][], rhMin = 22) => {
         const cw = TW / 4;
+        const padX = 5;
+        const padY = 5;
         pairs.forEach((_, i) => {
           if (i % 2 !== 0) return;
+          // Mede a altura necessária da linha (maior conteúdo entre as 4 células)
+          let maxTxtH = 0;
+          const cells: string[] = [
+            pairs[i][0], pairs[i][1] || '—',
+            pairs[i + 1]?.[0] || '', pairs[i + 1]?.[1] || '',
+          ];
+          cells.forEach((c, ci) => {
+            if (!c) return;
+            doc.font(ci % 2 === 0 ? 'Helvetica-Bold' : 'Helvetica').fontSize(9);
+            const h = doc.heightOfString(c, { width: cw - 2 * padX });
+            if (h > maxTxtH) maxTxtH = h;
+          });
+          const rh = Math.max(rhMin, maxTxtH + 2 * padY);
           checar(rh);
           const ry = y;
           doc.save()
@@ -320,19 +384,19 @@ export class RelatoriosService {
              .restore();
           doc.save().strokeColor('#AAAAAA').lineWidth(0.4)
              .rect(ML, ry, TW, rh).stroke().restore();
-          doc.fillColor(C.preto).font('Helvetica-Bold').fontSize(10)
-             .text(pairs[i][0], ML + 4, ry + 7,
-                   { width: cw - 8, lineBreak: false });
+          doc.fillColor(C.preto).font('Helvetica-Bold').fontSize(9)
+             .text(pairs[i][0], ML + padX, ry + padY,
+                   { width: cw - 2 * padX });
           doc.font('Helvetica')
-             .text(pairs[i][1] || '—', ML + cw + 4, ry + 7,
-                   { width: cw - 8, lineBreak: false });
+             .text(pairs[i][1] || '—', ML + cw + padX, ry + padY,
+                   { width: cw - 2 * padX });
           if (pairs[i + 1]) {
             doc.font('Helvetica-Bold')
-               .text(pairs[i + 1][0], ML + 2 * cw + 4, ry + 7,
-                     { width: cw - 8, lineBreak: false });
+               .text(pairs[i + 1][0], ML + 2 * cw + padX, ry + padY,
+                     { width: cw - 2 * padX });
             doc.font('Helvetica')
-               .text(pairs[i + 1][1] || '—', ML + 3 * cw + 4, ry + 7,
-                     { width: cw - 8, lineBreak: false });
+               .text(pairs[i + 1][1] || '—', ML + 3 * cw + padX, ry + padY,
+                     { width: cw - 2 * padX });
           }
           y += rh;
         });
@@ -343,43 +407,52 @@ export class RelatoriosService {
       const HDRS = ['Nº', 'Descrição', 'Resultado', 'Observações'];
 
       const chkHdr = () => {
-        checar(22);
-        const rh = 26;
+        checar(24);
+        const rh = 24;
         doc.save().rect(ML, y, TW, rh).fill(C.azul).restore();
         let cx = ML;
         HDRS.forEach((h, i) => {
-          doc.fillColor(C.branco).font('Helvetica-Bold').fontSize(10)
-             .text(h, cx + 3, y + 8,
-                   { width: CWS[i] - 6, align: 'center', lineBreak: false });
+          doc.fillColor(C.branco).font('Helvetica-Bold').fontSize(9)
+             .text(h, cx + 4, y + 7,
+                   { width: CWS[i] - 8, align: 'center', lineBreak: false });
           cx += CWS[i];
         });
         y += rh;
       };
 
       const chkItem = (n: number, desc: string, sim: boolean, obs = '') => {
-        checar(28);
-        const rh = 38;
+        const padX = 4;
+        const padY = 6;
+        const resultadoTxt = sim ? '(x) Sim\n( ) Não' : '( ) Sim\n(x) Não';
+        // Mede a altura de cada coluna que pode quebrar linha
+        doc.font('Helvetica').fontSize(9);
+        const descH = doc.heightOfString(desc, { width: CWS[1] - 2 * padX });
+        const obsH  = obs ? doc.heightOfString(obs, { width: CWS[3] - 2 * padX }) : 0;
+        const resH  = doc.heightOfString(resultadoTxt, { width: CWS[2] - 2 * padX });
+        const rh = Math.max(34, descH + 2 * padY, obsH + 2 * padY, resH + 2 * padY);
+        checar(rh);
         const bg = n % 2 === 0 ? C.cinzaL : C.branco;
         doc.save().rect(ML, y, TW, rh).fill(bg)
            .strokeColor('#CCCCCC').lineWidth(0.3).rect(ML, y, TW, rh).stroke().restore();
 
         let cx = ML;
-        // Nº
-        doc.fillColor(C.preto).font('Helvetica').fontSize(10)
-           .text(String(n), cx + 2, y + 14,
+        // Nº (centralizado verticalmente)
+        doc.fillColor(C.preto).font('Helvetica').fontSize(9)
+           .text(String(n), cx + 2, y + (rh - 10) / 2,
                  { width: CWS[0] - 4, align: 'center', lineBreak: false });
         cx += CWS[0];
         // Descrição
-        doc.text(desc, cx + 3, y + 6, { width: CWS[1] - 6 });
+        doc.font('Helvetica').fontSize(9)
+           .text(desc, cx + padX, y + padY, { width: CWS[1] - 2 * padX });
         cx += CWS[1];
         // Resultado
-        doc.fontSize(10)
-           .text(sim ? '(x) Sim\n( ) Não' : '( ) Sim\n(x) Não',
-                 cx + 2, y + 6, { width: CWS[2] - 4, align: 'center' });
+        doc.fontSize(9)
+           .text(resultadoTxt, cx + 2, y + (rh - resH) / 2,
+                 { width: CWS[2] - 4, align: 'center' });
         cx += CWS[2];
         // Observações
-        doc.fontSize(10)
-           .text(obs || '', cx + 3, y + 6, { width: CWS[3] - 6 });
+        doc.fontSize(9)
+           .text(obs || '', cx + padX, y + padY, { width: CWS[3] - 2 * padX });
         y += rh;
       };
 
@@ -406,18 +479,90 @@ export class RelatoriosService {
 
       // ══════════════════════════════════════════════════════════════════════
       // CAPA
+      // Ordem: título → logo do cliente → foto do equipamento → identificação
+      // Distribuição harmônica: mede a altura de todos os blocos, calcula o
+      // espaço livre da página e o reparte como respiros proporcionais.
       // ══════════════════════════════════════════════════════════════════════
       novaPage();
-      sp(10);
 
+      // ── Pré-cálculo das dimensões de cada bloco ──────────────────────────
+      // Título (2 linhas de 10pt)
+      doc.font('Helvetica-Bold').fontSize(10);
+      const tituloLnH = doc.currentLineHeight();
+      const tituloH   = tituloLnH * 2 + 6;
+
+      // Logo do cliente
+      let logoDrawW = 0, logoDrawH = 0;
+      if (clienteLogoPrep) {
+        const logoBoxW = 210, logoBoxH = 80;
+        const lScale = Math.min(logoBoxW / clienteLogoPrep.w, logoBoxH / clienteLogoPrep.h);
+        logoDrawW = clienteLogoPrep.w * lScale;
+        logoDrawH = clienteLogoPrep.h * lScale;
+      }
+
+      // Foto do equipamento + legenda
+      let fotoDrawW = 0, fotoDrawH = 0, fotoLegH = 0;
+      let capaLegTxt = '';
+      if (capaPrep) {
+        const boxW = 340, boxH = 250;
+        const scale = Math.min(boxW / capaPrep.w, boxH / capaPrep.h);
+        fotoDrawW = capaPrep.w * scale;
+        fotoDrawH = capaPrep.h * scale;
+        capaLegTxt = capaPrep.legenda;
+        doc.font('Helvetica-Oblique').fontSize(9);
+        fotoLegH = doc.heightOfString(capaLegTxt, { width: TW, align: 'center' }) + 4;
+      }
+
+      // Caixa de identificação
+      const idH = 78;
+
+      // ── Distribuição do espaço livre ─────────────────────────────────────
+      const blocos: number[] = [tituloH];
+      if (clienteLogoPrep) blocos.push(logoDrawH);
+      if (capaPrep)        blocos.push(fotoDrawH + fotoLegH);
+      blocos.push(idH);
+
+      const areaTop    = CONTENT_TOP;
+      const areaBottom = CONTENT_BOTTOM;
+      const areaH      = areaBottom - areaTop;
+      const somaBlocos = blocos.reduce((a, b) => a + b, 0);
+      // Espaço livre repartido: um respiro a mais que o nº de blocos
+      // (topo + entre cada par + base), com folga maior nas pontas.
+      const folga   = Math.max(0, areaH - somaBlocos);
+      const nGaps   = blocos.length + 1;
+      const gap     = folga / nGaps;
+
+      y = areaTop + gap;
+
+      // ── Título ───────────────────────────────────────────────────────────
       doc.fillColor(C.azul).font('Helvetica-Bold').fontSize(10)
          .text('RELATÓRIO DE INSPEÇÃO', ML, y, { align: 'center', width: TW });
       y = doc.y + 6;
       doc.text('DE SEGURANÇA', ML, y, { align: 'center', width: TW });
-      y = doc.y + 20;
+      y += tituloLnH + gap;
 
-      // Caixa de identificação
-      const idH = 78;
+      // ── Logo do cliente (sem fundo, transparência preservada) ────────────
+      if (clienteLogoPrep) {
+        const lX = ML + (TW - logoDrawW) / 2;
+        doc.image(clienteLogoPrep.buffer, lX, y, { fit: [logoDrawW, logoDrawH] });
+        y += logoDrawH + gap;
+      }
+
+      // ── Foto do equipamento (sem fundo: caixa branca/vazada) ─────────────
+      if (capaPrep) {
+        try {
+          const imgX = ML + (TW - fotoDrawW) / 2;
+          doc.image(capaPrep.buffer, imgX, y, { fit: [fotoDrawW, fotoDrawH] });
+          y += fotoDrawH + 4;
+          doc.fillColor(C.cinzaT).font('Helvetica-Oblique').fontSize(9)
+             .text(capaLegTxt, ML, y, { width: TW, align: 'center' });
+          y += fotoLegH - 4 + gap;
+        } catch {
+          // Imagem inválida, ignora.
+        }
+      }
+
+      // ── Caixa de identificação ───────────────────────────────────────────
       doc.save().rect(ML, y, TW, idH).fill(C.azulC)
          .strokeColor(C.azulM).lineWidth(0.8).rect(ML, y, TW, idH).stroke().restore();
       doc.fillColor(C.azul).font('Helvetica-Bold').fontSize(10)
@@ -443,27 +588,6 @@ export class RelatoriosService {
                  { width: TW / 2 - 8, align: 'center', lineBreak: false });
       });
       y += idH + 12;
-
-      // Foto de capa do equipamento (se marcada pelo engenheiro)
-      if (fotoCapa?.filename) {
-        const capaPath = path.join(process.cwd(), 'uploads', fotoCapa.filename);
-        if (fs.existsSync(capaPath)) {
-          try {
-            const imgW = 320;
-            const imgH = 240;
-            const imgX = ML + (TW - imgW) / 2;
-            doc.image(capaPath, imgX, y, { fit: [imgW, imgH], align: 'center' });
-            y += imgH + 6;
-            if (fotoCapa.legenda) {
-              doc.fillColor(C.cinzaT).font('Helvetica-Oblique').fontSize(10)
-                 .text(fotoCapa.legenda, ML, y, { width: TW, align: 'center' });
-              y = doc.y + 4;
-            }
-          } catch {
-            // Imagem inválida, ignora.
-          }
-        }
-      }
 
       // ══════════════════════════════════════════════════════════════════════
       // PÁG 2 – INTRODUÇÃO
@@ -552,15 +676,17 @@ export class RelatoriosService {
         ['Calibração:', 'Instrumentos de Segurança (Manômetros e Válvulas de Segurança)'],
       ];
       inspcRows.forEach(([l, v]) => {
-        checar(18);
-        const rh = 18;
+        doc.font('Helvetica').fontSize(8.5);
+        const vH = doc.heightOfString(v, { width: inspcW2 - 10 });
+        const rh = Math.max(20, vH + 10);
+        checar(rh);
         doc.save().rect(ML, y, inspcW1, rh).fill(C.cinzaH).restore();
         doc.save().strokeColor('#AAAAAA').lineWidth(0.4)
            .rect(ML, y, TW, rh).stroke().restore();
-        doc.fillColor(C.preto).font('Helvetica-Bold').fontSize(7.5)
-           .text(l, ML + 4, y + 5, { width: inspcW1 - 8, lineBreak: false });
+        doc.fillColor(C.preto).font('Helvetica-Bold').fontSize(8.5)
+           .text(l, ML + 5, y + 5, { width: inspcW1 - 10 });
         doc.font('Helvetica')
-           .text(v, ML + inspcW1 + 4, y + 5, { width: inspcW2 - 8, lineBreak: false });
+           .text(v, ML + inspcW1 + 5, y + 5, { width: inspcW2 - 10 });
         y += rh;
       });
       sp(3);
@@ -573,16 +699,19 @@ export class RelatoriosService {
         ['ASME Seção VIII, Div. I:', 'Rules for Construction of Pressure Vessels'],
       ];
       normas.forEach(([l, v]) => {
-        checar(18);
-        const rh = 18;
-        doc.save().rect(ML, y, TW * 0.40, rh).fill(C.cinzaH).restore();
+        const cwL = TW * 0.40, cwV = TW * 0.60;
+        doc.font('Helvetica').fontSize(8.5);
+        const vH = doc.heightOfString(v, { width: cwV - 10 });
+        const lH = doc.heightOfString(l, { width: cwL - 10 });
+        const rh = Math.max(20, vH + 10, lH + 10);
+        checar(rh);
+        doc.save().rect(ML, y, cwL, rh).fill(C.cinzaH).restore();
         doc.save().strokeColor('#AAAAAA').lineWidth(0.4)
            .rect(ML, y, TW, rh).stroke().restore();
-        doc.fillColor(C.preto).font('Helvetica-Bold').fontSize(7.5)
-           .text(l, ML + 4, y + 5, { width: TW * 0.40 - 8, lineBreak: false });
+        doc.fillColor(C.preto).font('Helvetica-Bold').fontSize(8.5)
+           .text(l, ML + 5, y + 5, { width: cwL - 10 });
         doc.font('Helvetica')
-           .text(v, ML + TW * 0.40 + 4, y + 5,
-                 { width: TW * 0.60 - 8, lineBreak: false });
+           .text(v, ML + cwL + 5, y + 5, { width: cwV - 10 });
         y += rh;
       });
 
@@ -823,22 +952,19 @@ export class RelatoriosService {
         subSecao('Instrumentos de medição utilizados');
         const iCws = [TW * 0.30, TW * 0.18, TW * 0.16, TW * 0.18, TW * 0.18];
         const iHdrs = ['Instrumento', 'Nº Série', 'Cert.', 'Calibração', 'Validade'];
-        const iRh = 18;
-        checar(iRh);
-        doc.save().rect(ML, y, TW, iRh).fill(C.azul).restore();
+        const iRhHdr = 20;
+        checar(iRhHdr);
+        doc.save().rect(ML, y, TW, iRhHdr).fill(C.azul).restore();
         let icx = ML;
         iHdrs.forEach((h, i) => {
-          doc.fillColor(C.branco).font('Helvetica-Bold').fontSize(7)
-             .text(h, icx + 3, y + 5,
+          doc.fillColor(C.branco).font('Helvetica-Bold').fontSize(7.5)
+             .text(h, icx + 3, y + 6,
                    { width: iCws[i] - 6, align: 'center', lineBreak: false });
           icx += iCws[i];
         });
-        y += iRh;
+        y += iRhHdr;
         instrumentos.forEach((im, ri) => {
-          checar(iRh);
           const bg = ri % 2 === 0 ? C.branco : C.cinzaL;
-          doc.save().rect(ML, y, TW, iRh).fill(bg)
-             .strokeColor('#AAAAAA').lineWidth(0.4).rect(ML, y, TW, iRh).stroke().restore();
           const vals = [
             `${im.nome}${im.modelo ? ' — ' + im.modelo : ''}`,
             im.serie || '—',
@@ -846,11 +972,25 @@ export class RelatoriosService {
             fdt(im.data_calibracao),
             fdt(im.validade_calibracao),
           ];
+          // Altura ajustada ao maior conteúdo da linha
+          let cellH = 0;
+          vals.forEach((v, i) => {
+            doc.font('Helvetica').fontSize(7.5);
+            const h = doc.heightOfString(String(v), { width: iCws[i] - 8 });
+            if (h > cellH) cellH = h;
+          });
+          const iRh = Math.max(18, cellH + 8);
+          checar(iRh);
+          doc.save().rect(ML, y, TW, iRh).fill(bg)
+             .strokeColor('#AAAAAA').lineWidth(0.4).rect(ML, y, TW, iRh).stroke().restore();
           let vcx = ML;
           vals.forEach((v, i) => {
-            doc.fillColor(C.preto).font('Helvetica').fontSize(7)
-               .text(String(v), vcx + 3, y + 5,
-                     { width: iCws[i] - 6, align: 'center', lineBreak: false });
+            const txt = String(v);
+            doc.font('Helvetica').fontSize(7.5);
+            const h = doc.heightOfString(txt, { width: iCws[i] - 8 });
+            doc.fillColor(C.preto).font('Helvetica').fontSize(7.5)
+               .text(txt, vcx + 4, y + (iRh - h) / 2,
+                     { width: iCws[i] - 8, align: 'center' });
             vcx += iCws[i];
           });
           y += iRh;
@@ -868,11 +1008,30 @@ export class RelatoriosService {
         secao('6 – RELATÓRIO FOTOGRÁFICO');
         sp(2);
 
-        const GAP_H = 12;
-        const GAP_V = 8;
-        const LEG_H = 14;
-        const slotW = (TW - GAP_H) / 2;
-        const MAX_SLOT_H = 320;
+        // ── Layout 2 colunas com CAIXA UNIFORME ──────────────────────────────
+        // Cada foto ocupa uma caixa de dimensões fixas e idênticas. A imagem é
+        // centralizada dentro da caixa preservando proporção (fit isolado),
+        // portanto nunca é distorcida. Logo abaixo da caixa há um campo de
+        // legenda dedicado, com altura própria, que não invade a foto nem a
+        // linha de baixo.
+        const GAP_H   = 14;             // espaço horizontal entre colunas
+        const GAP_V   = 14;             // espaço vertical entre itens
+        const PAD_IMG = 4;              // respiro interno da caixa de foto
+        const LEG_PAD = 4;              // respiro interno do campo de legenda
+        const slotW   = (TW - GAP_H) / 2;
+        const BOX_H   = 200;            // altura fixa e uniforme da caixa de foto
+
+        // Calcula a altura do campo de legenda baseada na legenda mais longa,
+        // para que TODAS as caixas fiquem alinhadas na mesma grade.
+        doc.font('Helvetica-Oblique').fontSize(8.5);
+        let legBodyH = 0;
+        for (const fp of fotosPrep) {
+          const h = doc.heightOfString(`Foto ${fp.numero}: ${fp.legenda}`,
+                                       { width: slotW - 2 * LEG_PAD });
+          if (h > legBodyH) legBodyH = h;
+        }
+        const LEG_H   = Math.max(20, legBodyH + 2 * LEG_PAD);
+        const ITEM_H  = BOX_H + LEG_H + GAP_V;   // altura total de um item
 
         const drawPlaceholder = (x: number, yPos: number, w: number, h: number, msg: string) => {
           doc.save().strokeColor('#AAAAAA').lineWidth(0.4)
@@ -882,48 +1041,55 @@ export class RelatoriosService {
                    { width: w - 12, align: 'center', lineBreak: false });
         };
 
-        const drawFotoSlot = (fp: FotoPrep, x: number, yPos: number, w: number, h: number) => {
+        // Desenha a caixa da foto (uniforme) + campo de legenda dedicado.
+        const drawFotoSlot = (fp: FotoPrep, x: number, yPos: number) => {
+          // 1) Moldura da caixa de foto
+          doc.save().strokeColor('#AAAAAA').lineWidth(0.5)
+             .rect(x, yPos, slotW, BOX_H).stroke().restore();
+
+          // 2) Imagem centralizada na caixa, SEM distorção (fit isolado)
           if (fp.buffer) {
             try {
-              doc.image(fp.buffer, x, yPos, { fit: [w, h], align: 'center', valign: 'center' });
+              const availW = slotW - 2 * PAD_IMG;
+              const availH = BOX_H - 2 * PAD_IMG;
+              const scale  = Math.min(availW / fp.w, availH / fp.h);
+              const drawW  = fp.w * scale;
+              const drawH  = fp.h * scale;
+              const imgX   = x + (slotW - drawW) / 2;
+              const imgY   = yPos + (BOX_H - drawH) / 2;
+              doc.image(fp.buffer, imgX, imgY, { fit: [drawW, drawH] });
             } catch {
-              drawPlaceholder(x, yPos, w, h, `[Foto ${fp.numero} – inválida]`);
+              drawPlaceholder(x, yPos, slotW, BOX_H, `[Foto ${fp.numero} – inválida]`);
             }
           } else {
-            drawPlaceholder(x, yPos, w, h, `[Foto ${fp.numero} – não encontrada]`);
+            drawPlaceholder(x, yPos, slotW, BOX_H, `[Foto ${fp.numero} – não encontrada]`);
           }
-          doc.fillColor(C.cinzaT).font('Helvetica-Oblique').fontSize(8)
-             .text(fp.legenda, x, yPos + h + 2, { width: w, align: 'center' });
+
+          // 3) Campo de legenda dedicado, logo abaixo da caixa
+          const legY = yPos + BOX_H;
+          doc.save()
+             .rect(x, legY, slotW, LEG_H).fill(C.cinzaL)
+             .strokeColor('#CCCCCC').lineWidth(0.4)
+             .rect(x, legY, slotW, LEG_H).stroke()
+             .restore();
+          doc.fillColor(C.cinzaT).font('Helvetica-Oblique').fontSize(8.5)
+             .text(`Foto ${fp.numero}: ${fp.legenda}`,
+                   x + LEG_PAD, legY + LEG_PAD,
+                   { width: slotW - 2 * LEG_PAD, align: 'center' });
         };
 
-        let yLeft = y;
-        let yRight = y;
-
-        for (const fp of fotosPrep) {
-          const aspect = fp.h / fp.w;
-          const slotH = Math.min(MAX_SLOT_H, slotW * aspect);
-          const totalH = slotH + LEG_H + GAP_V;
-
-          const onLeft = yLeft <= yRight;
-          let yCol = onLeft ? yLeft : yRight;
-          let xCol = onLeft ? ML : ML + slotW + GAP_H;
-
-          if (yCol + totalH > CONTENT_BOTTOM) {
+        // Itera em pares (linha a linha) — grade uniforme, colunas alinhadas.
+        for (let i = 0; i < fotosPrep.length; i += 2) {
+          if (y + ITEM_H > CONTENT_BOTTOM) {
             novaPage();
-            yLeft = y;
-            yRight = y;
-            yCol = y;
-            xCol = ML;
-            drawFotoSlot(fp, xCol, yCol, slotW, slotH);
-            yLeft = yCol + totalH;
-            continue;
           }
-
-          drawFotoSlot(fp, xCol, yCol, slotW, slotH);
-          if (onLeft) yLeft = yCol + totalH;
-          else        yRight = yCol + totalH;
+          const rowY = y;
+          drawFotoSlot(fotosPrep[i], ML, rowY);
+          if (fotosPrep[i + 1]) {
+            drawFotoSlot(fotosPrep[i + 1], ML + slotW + GAP_H, rowY);
+          }
+          y = rowY + ITEM_H;
         }
-        y = Math.max(yLeft, yRight);
       }
 
       // ══════════════════════════════════════════════════════════════════════
@@ -965,14 +1131,10 @@ export class RelatoriosService {
         y += mRh;
 
         pontos.forEach((pt, ri) => {
-          checar(mRh);
           const enc  = parseFloat(pt.espessura_encontrada) || 0;
           const minn = parseFloat(pt.espessura_minima)     || 0;
           const ok   = enc >= minn;
           const bg   = !ok ? '#FFCCCC' : (ri % 2 === 0 ? C.branco : C.cinzaL);
-
-          doc.save().rect(ML, y, TW, mRh).fill(bg)
-             .strokeColor('#AAAAAA').lineWidth(0.4).rect(ML, y, TW, mRh).stroke().restore();
 
           const vals = [
             pt.numero,
@@ -980,29 +1142,48 @@ export class RelatoriosService {
             fn(pt.espessura_nominal),
             fn(enc),
             fn(minn),
-            ok ? 'Conforme' : 'NÃO CONFORME ⚠',
+            ok ? 'Conforme' : 'NÃO CONFORME',
           ];
+          // Altura ajustada ao maior conteúdo da linha
+          let cellH = 0;
+          vals.forEach((v, i) => {
+            doc.font('Helvetica').fontSize(7.5);
+            const h = doc.heightOfString(String(v), { width: mCws[i] - 8 });
+            if (h > cellH) cellH = h;
+          });
+          const rh = Math.max(20, cellH + 10);
+          checar(rh);
+
+          doc.save().rect(ML, y, TW, rh).fill(bg)
+             .strokeColor('#AAAAAA').lineWidth(0.4).rect(ML, y, TW, rh).stroke().restore();
+
           let vcx = ML;
           vals.forEach((v, i) => {
+            const txt = String(v);
+            doc.font('Helvetica').fontSize(7.5);
+            const h = doc.heightOfString(txt, { width: mCws[i] - 8 });
             doc.fillColor(C.preto)
                .font(!ok && i === 5 ? 'Helvetica-Bold' : 'Helvetica').fontSize(7.5)
-               .text(String(v), vcx + 4, y + 6,
-                     { width: mCws[i] - 8, align: 'center', lineBreak: false });
+               .text(txt, vcx + 4, y + (rh - h) / 2,
+                     { width: mCws[i] - 8, align: 'center' });
             vcx += mCws[i];
           });
-          y += mRh;
+          y += rh;
         });
         sp(3);
 
         if (me.croqui_filename) {
           subSecao('CROQUI DO EQUIPAMENTO');
           sp(2);
-          checar(145);
+          const croquiBoxW = 220;
+          const croquiBoxH = 165;
+          checar(croquiBoxH + 10);
           const croquiPath = path.join(process.cwd(), 'uploads', me.croqui_filename);
           if (fs.existsSync(croquiPath)) {
             try {
-              doc.image(croquiPath, ML, y, { width: 200, height: 150, fit: [200, 150] });
-              y += 155;
+              // fit isolado: a imagem cabe na caixa preservando proporção
+              doc.image(croquiPath, ML, y, { fit: [croquiBoxW, croquiBoxH] });
+              y += croquiBoxH + 8;
             } catch {
               doc.fillColor(C.cinzaT).font('Helvetica').fontSize(10)
                  .text('[Croqui – arquivo inválido]', ML, y + 50);
@@ -1010,10 +1191,11 @@ export class RelatoriosService {
             }
           } else {
             doc.save().strokeColor('#AAAAAA').lineWidth(0.4)
-               .rect(ML, y, 200, 150).stroke().restore();
+               .rect(ML, y, croquiBoxW, croquiBoxH).stroke().restore();
             doc.fillColor(C.cinzaT).font('Helvetica').fontSize(10)
-               .text('[Croqui – imagem não encontrada]', ML + 10, y + 70);
-            y += 160;
+               .text('[Croqui – imagem não encontrada]', ML + 10,
+                     y + croquiBoxH / 2 - 6);
+            y += croquiBoxH + 10;
           }
           sp(3);
         }

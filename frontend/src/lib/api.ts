@@ -32,6 +32,14 @@ export const clientesApi = {
   criar:      (data: any)           => api.post('/clientes', data).then(r => r.data),
   atualizar:  (id: string, d: any)  => api.patch(`/clientes/${id}`, d).then(r => r.data),
   excluir:    (id: string)          => api.delete(`/clientes/${id}`).then(r => r.data),
+  uploadLogo: (id: string, file: File) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    return api.post(`/clientes/${id}/logo`, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }).then(r => r.data);
+  },
+  removerLogo: (id: string) => api.delete(`/clientes/${id}/logo`).then(r => r.data),
 };
 
 // ── Equipamentos ──────────────────────────────────────
