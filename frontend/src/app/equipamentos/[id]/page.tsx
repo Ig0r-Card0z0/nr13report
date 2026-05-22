@@ -5,7 +5,7 @@ import { Equipamento, Inspecao } from '@/types';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
-import { Pencil, Trash2 } from 'lucide-react';
+import { Pencil, Trash2, Plus, X } from 'lucide-react';
 import { fmtData } from '@/lib/utils';
 import { PRAZOS_NR13 } from '@/lib/constants';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -21,6 +21,7 @@ export default function DetalheEquipamentoPage({ params }: { params: { id: strin
   const eqId = params.id;
   const [eq, setEq] = useState<Equipamento | null>(null);
   const [inspecoes, setInspecoes] = useState<Inspecao[]>([]);
+  const [modalNovaInsp, setModalNovaInsp] = useState(false);
 
   const loadEq = () =>
     equipamentosApi.buscar(eqId)
@@ -140,12 +141,18 @@ export default function DetalheEquipamentoPage({ params }: { params: { id: strin
         )}
       </div>
 
-      <InspecaoForm
-        equipamentoId={eqId}
-        categoria={eq.categoria}
-        prazosAtuais={{ proxExterno: eq.prox_externo, proxInterno: eq.prox_interno, proxHidro: eq.prox_hidro }}
-        onSaved={() => { loadInsp(); loadEq(); }}
-      />
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold text-gray-700">
+          Inspeções {inspecoes.length > 0 && `(${inspecoes.length})`}
+        </h3>
+        <button
+          type="button"
+          onClick={() => setModalNovaInsp(true)}
+          className="btn btn-sm btn-primary"
+        >
+          <Plus size={13} /> Registrar nova inspeção
+        </button>
+      </div>
 
       <InspecoesTabela
         equipamentoId={eqId}
@@ -153,6 +160,30 @@ export default function DetalheEquipamentoPage({ params }: { params: { id: strin
         inspecoes={inspecoes}
         onReload={() => { loadInsp(); loadEq(); }}
       />
+
+      {modalNovaInsp && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-start justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl my-8 relative">
+            <div className="flex items-center justify-between px-5 pt-5">
+              <h3 className="text-sm font-semibold text-gray-800">Registrar nova inspeção</h3>
+              <button
+                type="button"
+                onClick={() => setModalNovaInsp(false)}
+                className="text-gray-400 hover:text-gray-600"
+                aria-label="Fechar"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <InspecaoForm
+              equipamentoId={eqId}
+              categoria={eq.categoria}
+              prazosAtuais={{ proxExterno: eq.prox_externo, proxInterno: eq.prox_interno, proxHidro: eq.prox_hidro }}
+              onSaved={() => { loadInsp(); loadEq(); setModalNovaInsp(false); }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

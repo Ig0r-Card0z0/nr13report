@@ -21,6 +21,21 @@ export interface CreateInspecaoDto {
   observacoes?: string;
 }
 
+export interface UpdateInspecaoDto {
+  data?: string;
+  tipo?: string;
+  resultado?: string;
+  phNome?: string;
+  phCrea?: string;
+  art?: string;
+  pmtaConfirmada?: number;
+  proxExterno?: string;
+  proxInterno?: string;
+  proxHidro?: string;
+  prazoComplementos?: string;
+  observacoes?: string;
+}
+
 export interface DispositivoSegurancaDto {
   tipo?: string;
   descricao?: string;
@@ -182,6 +197,121 @@ export class InspecoesService {
     });
 
     const id = tx();
+    return this.findOne(id);
+  }
+
+  update(id: string, dto: UpdateInspecaoDto) {
+    const existente = this.db.instance.prepare(
+      'SELECT * FROM inspecoes WHERE id = ?',
+    ).get(id) as any;
+    if (!existente) throw new NotFoundException('Inspeção não encontrada');
+
+    const tx = this.db.instance.transaction(() => {
+      const eq = this.db.instance.prepare(
+        `SELECT categoria FROM equipamentos WHERE id = ?`,
+      ).get(existente.equipamento_id) as any;
+      if (!eq) throw new NotFoundException('Equipamento não encontrado.');
+
+      // Valores finais — usa o que veio no DTO, senão mantém o existente.
+      const data = dto.data !== undefined && dto.data !== '' ? dto.data : existente.data;
+      const tipo = dto.tipo !== undefined && dto.tipo !== '' ? dto.tipo : existente.tipo;
+      const resultado = dto.resultado !== undefined && dto.resultado !== ''
+        ? dto.resultado : existente.resultado;
+
+      const calc = calcularPrazosNR13(eq.categoria, data);
+
+      const proxExterno = dto.proxExterno !== undefined && dto.proxExterno !== ''
+        ? dto.proxExterno : (existente.prox_externo || calc.prox_externo);
+      const proxInterno = dto.proxInterno !== undefined && dto.proxInterno !== ''
+        ? dto.proxInterno : (existente.prox_interno || calc.prox_interno);
+      const proxHidro = dto.proxHidro !== undefined && dto.proxHidro !== ''
+        ? dto.proxHidro : (existente.prox_hidro || calc.prox_hidro);
+
+      // Validação: prazos não podem ser anteriores à data da inspeção
+      this.validarPrazo('externo', proxExterno, data);
+      this.validarPrazo('interno', proxInterno, data);
+      this.validarPrazo('hidrostático', proxHidro, data);
+      // Validação: não exceder periodicidade máxima NR-13
+      this.validarMaxNR13('externo', proxExterno, calc.prox_externo, eq.categoria);
+      this.validarMaxNR13('interno', proxInterno, calc.prox_interno, eq.categoria);
+      this.validarMaxNR13('hidrostático', proxHidro, calc.prox_hidro, eq.categoria);
+
+      const phNome = dto.phNome !== undefined ? dto.phNome : existente.ph_nome;
+      const phCrea = dto.phCrea !== undefined ? dto.phCrea : existente.ph_crea;
+      const art = dto.art !== undefined ? dto.art : existente.art;
+      const pmtaConfirmada = dto.pmtaConfirmada !== undefined
+        ? dto.pmtaConfirmada : existente.pmta_confirmada;
+      const prazoComplementos = dto.prazoComplementos !== undefined
+        ? (dto.prazoComplementos || null) : existente.prazo_complementos;
+      const observacoes = dto.observacoes !== undefined
+        ? dto.observacoes : existente.observacoes;
+
+      try {
+        this.db.instance.prepare(`
+          UPDATE inspecoes SET
+            data = ?, tipo = ?, resultado = ?,
+            ph_nome = ?, ph_crea = ?, art = ?, pmta_confirmada = ?,
+            prox_externo = ?, prox_interno = ?, prox_hidro = ?,
+            prazo_complementos = ?, observacoes = ?
+          WHERE id = ?
+        `).run(
+          data, tipo, resultado,
+          phNome, phCrea, art, pmtaConfirmada,
+          proxExterno, proxInterno, proxHidro,
+          prazoComplementos, observacoes,
+          id,
+        );
+      } catch (err: any) {
+        const msg = String(err?.message || '');
+        if (!msg.includes('no column named prox_hidro') && !msg.includes('no column named prazo_complementos')) throw err;
+        this.db.instance.prepare(`
+          UPDATE inspecoes SET
+            data = ?, tipo = ?, resultado = ?,
+            ph_nome = ?, ph_crea = ?, art = ?, pmta_confirmada = ?,
+            prox_externo = ?, prox_interno = ?, observacoes = ?
+          WHERE id = ?
+        `).run(
+          data, tipo, resultado,
+          phNome, phCrea, art, pmtaConfirmada,
+          proxExterno, proxInterno, observacoes,
+          id,
+        );
+      }
+
+      // Sincroniza o equipamento somente se esta é a inspeção mais recente.
+      const maisRecente = this.db.instance.prepare(
+        `SELECT id FROM inspecoes WHERE equipamento_id = ?
+         ORDER BY data DESC, criado_em DESC LIMIT 1`,
+      ).get(existente.equipamento_id) as any;
+
+      if (maisRecente && maisRecente.id === id) {
+        this.db.instance.prepare(`
+          UPDATE equipamentos SET
+            dt_ultima_insp = ?,
+            tipo_ultima_insp = ?,
+            art_ultima_insp = ?,
+            prox_externo = ?,
+            prox_interno = ?,
+            prox_hidro = ?,
+            pmta = COALESCE(?, pmta),
+            atualizado_em = datetime('now')
+          WHERE id = ?
+        `).run(
+          data,
+          tipo,
+          art || null,
+          proxExterno || null,
+          proxInterno || null,
+          proxHidro || null,
+          pmtaConfirmada ?? null,
+          existente.equipamento_id,
+        );
+      }
+
+      return id;
+    });
+
+    tx();
     return this.findOne(id);
   }
 
