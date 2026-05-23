@@ -1,57 +1,41 @@
-// Periodicidade máxima de inspeção por categoria — NR-13 Anexo IV, Tabela 1 (sem SPIE)
-// Em ANOS para Externa (ext), Interna (int) e Teste Hidrostático (hid)
-export const PERIODICIDADE_NR13_ANOS: Record<string, { ext: number; int: number; hid: number }> = {
-  I:   { ext: 1, int: 3,  hid: 6  },
-  II:  { ext: 2, int: 4,  hid: 8  },
-  III: { ext: 3, int: 6,  hid: 12 },
-  IV:  { ext: 4, int: 8,  hid: 16 },
-  V:   { ext: 5, int: 10, hid: 20 },
-};
+/* ----------------------------------------------------------------------------
+ * Constantes da aplicação NR-13.
+ * A lógica de cálculo/categorização NR-13 vive em src/lib/nr13.ts (fonte única).
+ * Este arquivo re-exporta o que a interface consome e mantém as listas de UI.
+ * --------------------------------------------------------------------------*/
+import {
+  PERIODICIDADE_SEM_SPIE,
+  PRAZOS_NR13_TEXTO,
+  calcularPrazosNR13 as _calcularPrazosNR13,
+  CategoriaVaso,
+} from './nr13';
+
+// ── Periodicidade NR-13 (compatibilidade) ─────────────
+// Mantido para código existente. A fonte é src/lib/nr13.ts.
+export const PERIODICIDADE_NR13_ANOS = PERIODICIDADE_SEM_SPIE;
 
 // Versão textual para exibição em tabelas resumo
-export const PRAZOS_NR13: Record<string, { ext: string; int: string; hid: string }> = {
-  I:   { ext: '1 ano',  int: '3 anos',  hid: '6 anos'  },
-  II:  { ext: '2 anos', int: '4 anos',  hid: '8 anos'  },
-  III: { ext: '3 anos', int: '6 anos',  hid: '12 anos' },
-  IV:  { ext: '4 anos', int: '8 anos',  hid: '16 anos' },
-  V:   { ext: '5 anos', int: '10 anos', hid: '20 anos' },
-};
+export const PRAZOS_NR13: Record<string, { ext: string; int: string; hid: string }> =
+  PRAZOS_NR13_TEXTO;
 
 /**
- * Calcula próximos prazos NR-13 (externo/interno/hidrostático) somando a
- * periodicidade da Tabela 1 (sem SPIE) à data da última inspeção.
- * Retorna strings ISO (YYYY-MM-DD) ou null se faltar entrada.
+ * Calcula próximos prazos NR-13 (externo/interno/hidrostático).
+ * Reexportado de src/lib/nr13.ts — assinatura preservada para compatibilidade.
  */
 export function calcularPrazosNR13(
   categoria: string | null | undefined,
   dtUltimaInsp: string | null | undefined,
-): { proxExterno: string | null; proxInterno: string | null; proxHidro: string | null } {
-  if (!categoria || !dtUltimaInsp) {
-    return { proxExterno: null, proxInterno: null, proxHidro: null };
-  }
-  const cfg = PERIODICIDADE_NR13_ANOS[String(categoria).toUpperCase()];
-  if (!cfg) return { proxExterno: null, proxInterno: null, proxHidro: null };
-  const base = new Date(`${String(dtUltimaInsp).slice(0, 10)}T12:00:00Z`);
-  if (isNaN(base.getTime())) {
-    return { proxExterno: null, proxInterno: null, proxHidro: null };
-  }
-  const addYears = (y: number) => {
-    const d = new Date(base);
-    d.setUTCFullYear(d.getUTCFullYear() + y);
-    return d.toISOString().slice(0, 10);
-  };
-  return {
-    proxExterno: addYears(cfg.ext),
-    proxInterno: addYears(cfg.int),
-    proxHidro:   addYears(cfg.hid),
-  };
+  comSpie = false,
+) {
+  return _calcularPrazosNR13(categoria, dtUltimaInsp, comSpie);
 }
 
-// Classes de fluido NR-13
+// Classes de fluido NR-13 (4 classes — A, B, C, D)
 export const CLASSES_FLUIDO = [
-  { value: 'A', label: 'Classe A – Inflamável / Tóxico grave' },
-  { value: 'B', label: 'Classe B – Inflamável / Tóxico moderado' },
-  { value: 'C', label: 'Classe C – Vapor d\'água / Gás asfixiante / Ar' },
+  { value: 'A', label: 'Classe A – Inflamável / Combustível ≥ 200 °C / Tóxico grave' },
+  { value: 'B', label: 'Classe B – Combustível < 200 °C / Tóxico moderado' },
+  { value: 'C', label: 'Classe C – Vapor d\'água / Ar comprimido / Gás asfixiante' },
+  { value: 'D', label: 'Classe D – Outro fluido (água / líquidos < 200 °C)' },
 ];
 
 // Tipos de equipamento
@@ -99,3 +83,5 @@ export const CODIGOS_PROJETO = [
   'EN 13445',
   'PD 5500',
 ];
+
+export type { CategoriaVaso };

@@ -3,19 +3,21 @@ import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { clientesApi, equipamentosApi } from '@/lib/api';
 import { calcCategoria } from '@/lib/utils';
+import { FLUIDOS_NR13, CLASSE_PADRAO_POR_FLUIDO } from '@/lib/nr13';
 import { Cliente } from '@/types';
 import toast from 'react-hot-toast';
 
 interface Props { equipamentoId?: string; }
-
-const FLUIDOS = ['Ar Comprimido', 'Vapor d\'água', 'Nitrogênio', 'CO2', 'GLP', 'Óleo', 'Água', 'Outro'];
 
 export default function EquipamentoForm({ equipamentoId }: Props) {
   const router = useRouter();
   const sp = useSearchParams();
   const [clientes, setClientes] = useState<Cliente[]>([]);
   const [saving, setSaving] = useState(false);
-  const [catInfo, setCatInfo] = useState<{ cat: string; grupo: string; pv: number } | null>(null);
+  const [catInfo, setCatInfo] = useState<{
+    cat: string; grupo: string; pv: number; pvMpa: number; pvKpa: number;
+    enquadrado: boolean; dispensaInternaHidro: boolean; observacao: string;
+  } | null>(null);
 
   const [form, setForm] = useState({
     clienteId: sp.get('clienteId') || '',
@@ -41,9 +43,9 @@ export default function EquipamentoForm({ equipamentoId }: Props) {
   }, [equipamentoId]);
 
   useEffect(() => {
-    const v = parseFloat(form.volume), p = parseFloat(form.pmta);
-    if (v && p) {
-      const r = calcCategoria(v, p, form.classeFluido);
+    const v = parseFloat(form.volume), pmta = parseFloat(form.pmta);
+    if (v && pmta) {
+      const r = calcCategoria(v, pmta, form.classeFluido);
       setCatInfo(r);
       setForm(f => ({ ...f, categoria: r.cat, grupoRisco: r.grupo }));
     }
@@ -51,6 +53,19 @@ export default function EquipamentoForm({ equipamentoId }: Props) {
 
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(f => ({ ...f, [k]: e.target.value }));
+
+  // Ao escolher o fluido, aplica automaticamente a classe NR-13 padrão
+  // (Anexo II). Para fluidos com classe ambígua (ex.: "Outro") mantém a
+  // classe atual e deixa o usuário decidir manualmente.
+  const onFluidoChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const fluido = e.target.value;
+    const classePadrao = CLASSE_PADRAO_POR_FLUIDO[fluido];
+    setForm(f => ({
+      ...f,
+      fluido,
+      ...(classePadrao ? { classeFluido: classePadrao } : {}),
+    }));
+  };
 
   const submit = async () => {
     if (!form.clienteId) { toast.error('Selecione o cliente.'); return; }
@@ -134,16 +149,23 @@ export default function EquipamentoForm({ equipamentoId }: Props) {
       <div className="grid grid-cols-3 gap-4">
         <div>
           <label className="label">Fluido de trabalho</label>
-          <select className="input" value={form.fluido} onChange={set('fluido')}>
-            {FLUIDOS.map(o => <option key={o}>{o}</option>)}
+          <select className="input" value={form.fluido} onChange={onFluidoChange}>
+            {FLUIDOS_NR13.map(o => <option key={o.nome} value={o.nome}>{o.nome}</option>)}
           </select>
+          {(() => {
+            const meta = FLUIDOS_NR13.find(f => f.nome === form.fluido);
+            return meta?.observacao ? (
+              <div className="mt-1 text-[11px] text-gray-500">{meta.observacao}</div>
+            ) : null;
+          })()}
         </div>
         <div>
           <label className="label">Classe do fluido</label>
           <select className="input" value={form.classeFluido} onChange={set('classeFluido')}>
-            <option value="A">Classe A – Inflamável / Tóxico grave</option>
-            <option value="B">Classe B – Tóxico moderado</option>
-            <option value="C">Classe C – Vapor / Ar / Asfixiante</option>
+            <option value="A">Classe A – Inflamável / Combustível ≥ 200 °C / Tóxico ≤ 20 ppm / H₂ / acetileno</option>
+            <option value="B">Classe B – Combustível &lt; 200 °C / Tóxico &gt; 20 ppm</option>
+            <option value="C">Classe C – Vapor d'água / Ar comprimido / Asfixiante simples</option>
+            <option value="D">Classe D – Outros fluidos (água / líquidos &lt; 200 °C)</option>
           </select>
         </div>
         <div>
@@ -173,11 +195,36 @@ export default function EquipamentoForm({ equipamentoId }: Props) {
       </div>
 
       {catInfo && (
-        <div className="mt-3 p-3 bg-primary-50 rounded-lg grid grid-cols-4 gap-4 text-sm">
-          <div><div className="text-xs text-gray-500">P × V (MPa·m³)</div><div className="font-bold text-gray-900">{catInfo.pv.toFixed(2)}</div></div>
-          <div><div className="text-xs text-gray-500">Categoria</div><div className="font-bold text-primary-700">Cat. {catInfo.cat}</div></div>
-          <div><div className="text-xs text-gray-500">Grupo de Risco</div><div className="font-bold text-gray-900">{catInfo.grupo}</div></div>
-          <div><div className="text-xs text-gray-500">Classe do fluido</div><div className="font-bold text-gray-900">{form.classeFluido}</div></div>
+        <div className="mt-3 space-y-2">
+          <div className="p-3 bg-primary-50 rounded-lg grid grid-cols-4 gap-4 text-sm">
+            <div>
+              <div className="text-xs text-gray-500">P × V (MPa·m³)</div>
+              <div className="font-bold text-gray-900">{catInfo.pv.toFixed(2)}</div>
+              <div className="text-[10px] text-gray-400">{catInfo.pvKpa.toFixed(0)} kPa·m³</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500">Categoria</div>
+              <div className="font-bold text-primary-700">Cat. {catInfo.cat}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500">Grupo de Risco</div>
+              <div className="font-bold text-gray-900">{catInfo.grupo}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500">Classe do fluido</div>
+              <div className="font-bold text-gray-900">{form.classeFluido}</div>
+            </div>
+          </div>
+          {!catInfo.enquadrado && (
+            <div className="p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-600">
+              <span className="font-semibold">Fora do escopo:</span> {catInfo.observacao}
+            </div>
+          )}
+          {catInfo.dispensaInternaHidro && (
+            <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
+              <span className="font-semibold">Dispensa:</span> {catInfo.observacao}
+            </div>
+          )}
         </div>
       )}
 

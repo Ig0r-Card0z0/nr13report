@@ -1,3 +1,5 @@
+import { categorizarVaso, ClasseFluido } from './nr13';
+
 export function fmtData(dt?: string) {
   if (!dt) return '—';
   const p = dt.split('-');
@@ -19,13 +21,29 @@ export function vencStatus(dt?: string): 'ok' | 'info' | 'warn' | 'danger' | 'no
   return 'ok';
 }
 
+/**
+ * Categoriza um vaso de pressão conforme a NR-13 (Anexo II).
+ * Usa a lógica oficial de src/lib/nr13.ts: P × V com PMTA, matriz
+ * Classe × Grupo de risco, e regras de enquadramento/dispensa.
+ *
+ * @param volume Volume interno em m³.
+ * @param pmta   PMTA em bar (unidade do formulário).
+ * @param classe Classe do fluido (A, B, C ou D).
+ */
 export function calcCategoria(volume: number, pmta: number, classe: string) {
-  const pv = pmta * 0.1 * volume;
-  let cat = pv <= 0.1 ? 'I' : pv <= 1 ? 'II' : pv <= 10 ? 'III' : pv <= 100 ? 'IV' : 'V';
-  const cs = ['I', 'II', 'III', 'IV', 'V'];
-  if (classe === 'A' && cat !== 'V') cat = cs[cs.indexOf(cat) + 1];
-  const gr = { I: '1', II: '2', III: '3', IV: '4', V: '5' }[cat] ?? '?';
-  return { cat, grupo: `Grupo ${gr}`, pv };
+  const cl = (['A', 'B', 'C', 'D'].includes(classe) ? classe : 'D') as ClasseFluido;
+  const r = categorizarVaso(pmta, volume, cl);
+  return {
+    cat: r.categoria,
+    grupo: `Grupo ${r.grupo}`,
+    grupoNum: r.grupo,
+    pv: r.pvMpa,
+    pvMpa: r.pvMpa,
+    pvKpa: r.pvKpa,
+    enquadrado: r.enquadradoNR13,
+    dispensaInternaHidro: r.dispensaInternaHidro,
+    observacao: r.observacao,
+  };
 }
 
 export function maskCnpj(v: string) {

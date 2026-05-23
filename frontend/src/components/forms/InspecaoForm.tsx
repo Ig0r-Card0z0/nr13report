@@ -64,7 +64,12 @@ export function InspecaoForm({ equipamentoId, categoria, prazosAtuais, inspecao,
   const [salvandoProf, setSalvandoProf] = useState(false);
   const [temTemplate, setTemTemplate] = useState(false);
   const [templateInfo, setTemplateInfo] = useState<string>('');
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<{
+    data: string; tipo: string; resultado: string;
+    phNome: string; phCrea: string; art: string;
+    proxExterno: string; proxInterno: string; proxHidro: string;
+    prazoComplementos: string; observacoes: string;
+  }>({
     data: inspecao?.data?.slice(0, 10) || '',
     tipo: inspecao?.tipo || 'Externa',
     resultado: inspecao?.resultado || 'Apto',
