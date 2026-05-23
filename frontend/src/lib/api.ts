@@ -59,6 +59,7 @@ export const inspecoesApi = {
   listar:  (equipamentoId: string)  => api.get('/inspecoes', { params: { equipamentoId } }).then(r => r.data),
   buscar:  (id: string)             => api.get(`/inspecoes/${id}`).then(r => r.data),
   criar:   (data: any)              => api.post('/inspecoes', data).then(r => r.data),
+  atualizar: (id: string, data: any) => api.patch(`/inspecoes/${id}`, data).then(r => r.data),
   excluir: (id: string)             => api.delete(`/inspecoes/${id}`).then(r => r.data),
   uploadArt: (id: string, file: File) => {
     const fd = new FormData();

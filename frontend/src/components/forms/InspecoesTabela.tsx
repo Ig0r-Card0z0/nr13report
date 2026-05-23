@@ -8,9 +8,10 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { Tabs } from '@/components/ui/Tabs';
 import { FotoRelatorio } from './FotoRelatorio';
 import { MedicaoEspessuraForm } from './MedicaoEspessuraForm';
+import { InspecaoForm } from './InspecaoForm';
 import {
   ChevronDown, ChevronRight, Trash2, FileText, Image as ImageIcon,
-  Activity, Download, AlertTriangle, Check, Eye, X, Paperclip, Upload,
+  Activity, Download, AlertTriangle, Check, Eye, X, Paperclip, Upload, Pencil,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
@@ -38,7 +39,6 @@ function statusComplementos(ins: Inspecao, hoje = new Date()): { key: StatusKey;
 
 export function InspecoesTabela({ equipamentoId, equipamento, inspecoes, onReload }: Props) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [previewId, setPreviewId] = useState<string | null>(null);
 
   const excluir = async (id: string) => {
     try {
@@ -94,9 +94,8 @@ export function InspecoesTabela({ equipamentoId, equipamento, inspecoes, onReloa
                   expanded={expanded}
                   onToggle={() => setExpandedId(expanded ? null : ins.id)}
                   onExcluir={() => excluir(ins.id)}
-                  onPreview={() => setPreviewId(ins.id)}
                   equipamentoId={equipamentoId}
-                  metalBase={equipamento.metal_base}
+                  equipamento={equipamento}
                   onReload={onReload}
                 />
               );
@@ -105,42 +104,6 @@ export function InspecoesTabela({ equipamentoId, equipamento, inspecoes, onReloa
         </table>
       </div>
 
-      {previewId && (
-        <PDFPreviewModal
-          url={relatoriosApi.urlPDFInspecao(equipamentoId, previewId)}
-          urlDownload={relatoriosApi.urlPDFInspecaoDownload(equipamentoId, previewId)}
-          onClose={() => setPreviewId(null)}
-        />
-      )}
-    </div>
-  );
-}
-
-function PDFPreviewModal({ url, urlDownload, onClose }: { url: string; urlDownload: string; onClose: () => void }) {
-  return (
-    <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div
-        className="bg-white rounded-xl shadow-xl w-full max-w-5xl h-[90vh] flex flex-col overflow-hidden"
-        onClick={e => e.stopPropagation()}
-      >
-        <header className="flex items-center justify-between p-3 border-b border-gray-200">
-          <h3 className="font-semibold text-gray-800 text-sm">Pré-visualização do relatório PDF</h3>
-          <div className="flex gap-2">
-            <a
-              href={urlDownload}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn btn-sm btn-primary"
-            >
-              <Download size={12} /> Baixar
-            </a>
-            <button onClick={onClose} className="btn btn-sm" aria-label="Fechar pré-visualização">
-              <X size={14} />
-            </button>
-          </div>
-        </header>
-        <iframe src={url} className="flex-1 w-full" title="Pré-visualização do relatório PDF" />
-      </div>
     </div>
   );
 }
@@ -152,22 +115,23 @@ interface RowProps {
   expanded: boolean;
   onToggle: () => void;
   onExcluir: () => void;
-  onPreview: () => void;
   equipamentoId: string;
-  metalBase?: string;
+  equipamento: Equipamento;
   onReload: () => void;
 }
 
 function RowGroup({
-  ins, status, resultadoVariant, expanded, onToggle, onExcluir, onPreview,
-  equipamentoId, metalBase, onReload,
+  ins, status, resultadoVariant, expanded, onToggle, onExcluir,
+  equipamentoId, equipamento, onReload,
 }: RowProps) {
+  const metalBase = equipamento.metal_base;
   const podeBaixarPDF = status.key === 'completa';
   const pdfHref = relatoriosApi.urlPDFInspecaoDownload(equipamentoId, ins.id);
   const [docTab, setDocTab] = useState<'fotos' | 'ultrassom' | 'pdf' | 'seguranca'>('fotos');
   const [anexosSeg, setAnexosSeg] = useState<AnexoSeguranca[]>([]);
   const [loadingSeg, setLoadingSeg] = useState(false);
   const [uploadingSeg, setUploadingSeg] = useState(false);
+  const [editando, setEditando] = useState(false);
   const faltam: string[] = [];
   if ((ins.total_fotos ?? 0) === 0)      faltam.push('fotos');
   if ((ins.total_pontos_me ?? 0) === 0)  faltam.push('medição de espessura');
@@ -245,18 +209,26 @@ function RowGroup({
             <button
               onClick={() => {
                 if (!podeBaixarPDF) {
-                  toast.error('Complete fotos, medição e ART antes de pré-visualizar o PDF.');
+                  toast.error('Complete fotos, medição e ART antes de gerar o relatório.');
                   return;
                 }
-                onPreview();
+                setDocTab('pdf');
+                if (!expanded) onToggle();
               }}
               className={clsx(
                 'btn btn-xs',
                 podeBaixarPDF ? 'btn-primary' : 'opacity-40 cursor-not-allowed',
               )}
-              title={podeBaixarPDF ? 'Pré-visualizar PDF' : 'PDF disponível quando todos os complementos estiverem prontos'}
+              title={podeBaixarPDF ? 'Abrir relatório' : 'Relatório disponível quando todos os complementos estiverem prontos'}
             >
               <Eye size={11} />
+            </button>
+            <button
+              onClick={() => setEditando(true)}
+              className="btn btn-xs"
+              title="Editar dados da inspeção"
+            >
+              <Pencil size={11} />
             </button>
             <ConfirmDialog
               title="Excluir inspeção"
@@ -312,8 +284,8 @@ function RowGroup({
                 tabs={[
                   { id: 'fotos', label: 'Relatório fotográfico', icon: ImageIcon, badge: ins.total_fotos ?? 0 },
                   { id: 'ultrassom', label: 'Ultrassom', icon: Activity, badge: ins.total_pontos_me ?? 0 },
-                  { id: 'pdf', label: 'PDF', icon: FileText },
                   { id: 'seguranca', label: 'Dispositivos', icon: Paperclip, badge: anexosSeg.length },
+                  { id: 'pdf', label: 'Gerar Relatório', icon: FileText },
                 ]}
                 active={docTab}
                 onChange={id => setDocTab(id as any)}
@@ -356,28 +328,34 @@ function RowGroup({
                 {docTab === 'pdf' && (
                   <>
                     {podeBaixarPDF ? (
-                      <div className="flex items-center gap-3 flex-wrap">
-                        <button onClick={onPreview} className="btn btn-sm btn-primary">
-                          <Eye size={12} /> Pré-visualizar
-                        </button>
-                        <a
-                          href={pdfHref}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="btn btn-sm"
-                        >
-                          <Download size={12} /> Baixar
-                        </a>
-                        <span className="text-xs text-gray-400">
-                          O PDF reúne capa, dados do equipamento, fotos, ultrassom, ART e calibrações.
-                        </span>
+                      <div>
+                        <div className="flex items-center gap-3 flex-wrap mb-3">
+                          <a
+                            href={pdfHref}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn btn-sm btn-primary"
+                          >
+                            <Download size={12} /> Gerar e baixar PDF
+                          </a>
+                          <span className="text-xs text-gray-400">
+                            O PDF reúne capa, dados do equipamento, fotos, ultrassom, ART e calibrações.
+                          </span>
+                        </div>
+                        <div className="border border-gray-200 rounded-lg overflow-hidden bg-gray-100">
+                          <iframe
+                            src={relatoriosApi.urlPDFInspecao(equipamentoId, ins.id)}
+                            className="w-full h-[70vh]"
+                            title="Pré-visualização do relatório PDF"
+                          />
+                        </div>
                       </div>
                     ) : (
                       <div className="text-xs text-gray-500 bg-warning-50 border border-warning-200 rounded-lg p-3 flex items-start gap-2">
                         <AlertTriangle size={14} className="text-warning-700 mt-0.5 flex-shrink-0" />
                         <div>
                           <div className="font-semibold text-warning-700 mb-1">
-                            Pré-visualização indisponível
+                            Relatório indisponível
                           </div>
                           <div>
                             Para liberar o PDF, complete: <span className="font-medium">{faltam.join(', ')}</span>.
@@ -484,6 +462,37 @@ function RowGroup({
                 )}
               </div>
             </section>
+          </td>
+        </tr>
+      )}
+
+      {editando && (
+        <tr>
+          <td colSpan={7} className="p-0">
+            <div className="fixed inset-0 bg-black/50 z-50 flex items-start justify-center p-4 overflow-y-auto">
+              <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl my-8 relative">
+                <div className="flex items-center justify-between px-5 pt-5">
+                  <h3 className="text-sm font-semibold text-gray-800">
+                    Editar inspeção de {fmtData(ins.data)}
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setEditando(false)}
+                    className="text-gray-400 hover:text-gray-600"
+                    aria-label="Fechar"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+                <InspecaoForm
+                  equipamentoId={equipamentoId}
+                  categoria={equipamento.categoria}
+                  inspecao={ins}
+                  onCancel={() => setEditando(false)}
+                  onSaved={() => { setEditando(false); onReload(); }}
+                />
+              </div>
+            </div>
           </td>
         </tr>
       )}

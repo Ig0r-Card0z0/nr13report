@@ -5,6 +5,9 @@ dist/
 build/
 out/
 
+# ── Snapshots / pacotes locais (nao commitar) ─────────
+*.zip
+
 # ── Dados e uploads (runtime) ─────────────────────────
 data/
 uploads/

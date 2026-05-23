@@ -1,12 +1,12 @@
 import {
-  BadRequestException, Body, Controller, Delete, Get, Param, Post, Put, Query,
+  BadRequestException, Body, Controller, Delete, Get, Param, Patch, Post, Put, Query,
   UploadedFile, UploadedFiles, UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname, join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import { InspecoesService, CreateInspecaoDto } from './inspecoes.service';
+import { InspecoesService, CreateInspecaoDto, UpdateInspecaoDto } from './inspecoes.service';
 
 const storage = diskStorage({
   destination: join(process.cwd(), 'uploads'),
@@ -44,6 +44,11 @@ export class InspecoesController {
 
   @Post()
   create(@Body() dto: CreateInspecaoDto) { return this.service.create(dto); }
+
+  @Patch(':id')
+  update(@Param('id') id: string, @Body() dto: UpdateInspecaoDto) {
+    return this.service.update(id, dto);
+  }
 
   @Delete(':id')
   remove(@Param('id') id: string) { return this.service.remove(id); }

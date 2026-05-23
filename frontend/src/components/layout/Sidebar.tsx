@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, Users, Archive, Ruler, FileText, UserCog } from 'lucide-react';
+import { LayoutDashboard, Users, Archive, Ruler, FileText, UserCog, Gauge } from 'lucide-react';
 import clsx from 'clsx';
 import { instrumentosApi } from '@/lib/api';
 import { Instrumento } from '@/types';
@@ -111,6 +111,20 @@ export function Sidebar() {
             </div>
           )}
         </div>
+
+        <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-2 mb-2 mt-4">Ferramentas</div>
+        <Link
+          href="/ferramentas/conversor"
+          className={clsx(
+            'flex items-center gap-3 px-3 py-2 rounded-lg text-sm mb-1 transition-colors',
+            path === '/ferramentas/conversor'
+              ? 'bg-primary-50 text-primary-700 font-semibold'
+              : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+          )}
+        >
+          <Gauge size={15} />
+          Conversor de pressão
+        </Link>
       </nav>
 
       <div className="p-3 border-t border-gray-200">

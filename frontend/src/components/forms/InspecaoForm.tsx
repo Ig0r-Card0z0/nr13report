@@ -1,19 +1,40 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { inspecoesApi, profissionaisApi } from '@/lib/api';
-import { DispositivoSeguranca, Profissional } from '@/types';
+import { DispositivoSeguranca, Inspecao, Profissional } from '@/types';
 import { calcularPrazosNR13, PRAZOS_NR13 } from '@/lib/constants';
 import { fmtData } from '@/lib/utils';
 import { VencBadge } from '@/components/ui/VencBadge';
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import toast from 'react-hot-toast';
-import { FileText, Trash2, Upload, RefreshCw, AlertTriangle, Plus, X } from 'lucide-react';
+import { FileText, Trash2, Upload, RefreshCw, AlertTriangle, Plus, X, Save, ClipboardList } from 'lucide-react';
 
 interface Props {
   equipamentoId: string;
   categoria?: string;
   prazosAtuais?: { proxExterno?: string; proxInterno?: string; proxHidro?: string };
+  /** Quando informado, o formulário entra em modo edição da inspeção existente. */
+  inspecao?: Inspecao;
   onSaved: () => void;
+  /** Botão extra de cancelar (usado no modal de edição). */
+  onCancel?: () => void;
+}
+
+// Chave de armazenamento do template no navegador
+const TEMPLATE_KEY = 'nr13:inspecao:template';
+
+interface TemplateInspecao {
+  tipo: string;
+  resultado: string;
+  phNome: string;
+  phCrea: string;
+  art: string;
+  proxExterno: string;
+  proxInterno: string;
+  proxHidro: string;
+  prazoComplementos: string;
+  observacoes: string;
+  salvoEm: string;
 }
 
 const TIPOS = ['Externa', 'Interna', 'Interna e Externa'];
@@ -27,7 +48,9 @@ const ESPECIALIDADES = [
   'Outra',
 ];
 
-export function InspecaoForm({ equipamentoId, categoria, prazosAtuais, onSaved }: Props) {
+export function InspecaoForm({ equipamentoId, categoria, prazosAtuais, inspecao, onSaved, onCancel }: Props) {
+  const editando = !!inspecao;
+
   const [saving, setSaving] = useState(false);
   const [artFile, setArtFile] = useState<File | null>(null);
   const [overrides, setOverrides] = useState({ ext: false, int: false, hid: false });
@@ -39,19 +62,57 @@ export function InspecaoForm({ equipamentoId, categoria, prazosAtuais, onSaved }
     nome: '', crea: '', especialidade: 'Engenharia Mecânica',
   });
   const [salvandoProf, setSalvandoProf] = useState(false);
-  const [form, setForm] = useState({
-    data: '', tipo: 'Externa', resultado: 'Apto',
-    phNome: '', phCrea: '', art: '',
-    proxExterno: prazosAtuais?.proxExterno || '',
-    proxInterno: prazosAtuais?.proxInterno || '',
-    proxHidro:   prazosAtuais?.proxHidro   || '',
-    prazoComplementos: '',
-    observacoes: '',
+  const [temTemplate, setTemTemplate] = useState(false);
+  const [templateInfo, setTemplateInfo] = useState<string>('');
+  const [form, setForm] = useState<{
+    data: string; tipo: string; resultado: string;
+    phNome: string; phCrea: string; art: string;
+    proxExterno: string; proxInterno: string; proxHidro: string;
+    prazoComplementos: string; observacoes: string;
+  }>({
+    data: inspecao?.data?.slice(0, 10) || '',
+    tipo: inspecao?.tipo || 'Externa',
+    resultado: inspecao?.resultado || 'Apto',
+    phNome: inspecao?.ph_nome || '',
+    phCrea: inspecao?.ph_crea || '',
+    art: inspecao?.art || '',
+    proxExterno: inspecao?.prox_externo || prazosAtuais?.proxExterno || '',
+    proxInterno: inspecao?.prox_interno || prazosAtuais?.proxInterno || '',
+    proxHidro:   inspecao?.prox_hidro   || prazosAtuais?.proxHidro   || '',
+    prazoComplementos: inspecao?.prazo_complementos?.slice(0, 10) || '',
+    observacoes: inspecao?.observacoes || '',
   });
 
   useEffect(() => {
     profissionaisApi.listar().then(setProfissionais).catch(() => setProfissionais([]));
   }, []);
+
+  // Em modo edição, marca os prazos como ajustados para não serem recalculados.
+  useEffect(() => {
+    if (editando) setOverrides({ ext: true, int: true, hid: true });
+  }, [editando]);
+
+  // Verifica se há template salvo no navegador
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(TEMPLATE_KEY);
+      if (raw) {
+        const t = JSON.parse(raw) as TemplateInspecao;
+        setTemTemplate(true);
+        setTemplateInfo(t.salvoEm ? fmtData(t.salvoEm) : '');
+      }
+    } catch { setTemTemplate(false); }
+  }, []);
+
+  // Sincroniza o profissional selecionado com o PH já gravado (modo edição)
+  useEffect(() => {
+    if (!profissionais.length) return;
+    if (!form.phNome) return;
+    const p = profissionais.find(
+      x => x.nome === form.phNome && (x.crea || '') === (form.phCrea || ''),
+    );
+    if (p) setProfissionalId(p.id);
+  }, [profissionais]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selecionarProfissional = (id: string) => {
     setProfissionalId(id);
@@ -116,6 +177,76 @@ export function InspecaoForm({ equipamentoId, categoria, prazosAtuais, onSaved }
     }));
     setOverrides({ ext: false, int: false, hid: false });
     toast.success('Prazos recalculados pela NR-13.');
+  };
+
+  // ── Template ────────────────────────────────────────
+  // Guarda apenas os dados do formulário de inspeção. Fotos, ultrassom e
+  // anexos NÃO entram no template — permanecem vinculados à inspeção original.
+  const salvarComoTemplate = () => {
+    const t: TemplateInspecao = {
+      tipo: form.tipo,
+      resultado: form.resultado,
+      phNome: form.phNome,
+      phCrea: form.phCrea,
+      art: form.art,
+      proxExterno: form.proxExterno,
+      proxInterno: form.proxInterno,
+      proxHidro: form.proxHidro,
+      prazoComplementos: form.prazoComplementos,
+      observacoes: form.observacoes,
+      salvoEm: new Date().toISOString().slice(0, 10),
+    };
+    try {
+      localStorage.setItem(TEMPLATE_KEY, JSON.stringify(t));
+      setTemTemplate(true);
+      setTemplateInfo(fmtData(t.salvoEm));
+      toast.success('Template salvo. Use-o em outra inspeção do mesmo dia.');
+    } catch {
+      toast.error('Não foi possível salvar o template neste navegador.');
+    }
+  };
+
+  const aplicarTemplate = () => {
+    try {
+      const raw = localStorage.getItem(TEMPLATE_KEY);
+      if (!raw) { toast.error('Nenhum template salvo.'); return; }
+      const t = JSON.parse(raw) as TemplateInspecao;
+      setForm(f => ({
+        ...f,
+        // mantém a data atual já digitada; o template não carrega data
+        tipo: t.tipo || f.tipo,
+        resultado: t.resultado || f.resultado,
+        phNome: t.phNome || '',
+        phCrea: t.phCrea || '',
+        art: t.art || '',
+        proxExterno: t.proxExterno || '',
+        proxInterno: t.proxInterno || '',
+        proxHidro: t.proxHidro || '',
+        prazoComplementos: t.prazoComplementos || '',
+        observacoes: t.observacoes || '',
+      }));
+      // os prazos do template são considerados ajustados manualmente
+      setOverrides({
+        ext: !!t.proxExterno,
+        int: !!t.proxInterno,
+        hid: !!t.proxHidro,
+      });
+      // tenta casar o profissional do template com a lista
+      const p = profissionais.find(
+        x => x.nome === t.phNome && (x.crea || '') === (t.phCrea || ''),
+      );
+      setProfissionalId(p?.id || '');
+      toast.success('Template aplicado. Confira a data e os complementos.');
+    } catch {
+      toast.error('Template inválido ou corrompido.');
+    }
+  };
+
+  const limparTemplate = () => {
+    try { localStorage.removeItem(TEMPLATE_KEY); } catch { /* noop */ }
+    setTemTemplate(false);
+    setTemplateInfo('');
+    toast.success('Template removido.');
   };
 
   const onArtChange = (file: File | undefined) => {
@@ -187,8 +318,7 @@ export function InspecaoForm({ equipamentoId, categoria, prazosAtuais, onSaved }
     if (erro) { toast.error(erro); return; }
     setSaving(true);
     try {
-      const criada = await inspecoesApi.criar({
-        equipamentoId,
+      const payload = {
         data: form.data,
         tipo: form.tipo,
         resultado: form.resultado,
@@ -200,7 +330,24 @@ export function InspecaoForm({ equipamentoId, categoria, prazosAtuais, onSaved }
         proxHidro:   form.proxHidro   || undefined,
         prazoComplementos: form.prazoComplementos || undefined,
         observacoes: form.observacoes || undefined,
-      });
+      };
+
+      if (editando && inspecao) {
+        // ── EDIÇÃO ──
+        // Atualiza somente os dados da inspeção. Fotos, ultrassom e anexos
+        // permanecem como estão — não são tocados aqui.
+        await inspecoesApi.atualizar(inspecao.id, payload);
+        if (artFile) {
+          try { await inspecoesApi.uploadArt(inspecao.id, artFile); }
+          catch { toast.error('Inspeção atualizada, mas houve erro ao substituir a ART.'); }
+        }
+        toast.success('Inspeção atualizada!');
+        onSaved();
+        return;
+      }
+
+      // ── CRIAÇÃO ──
+      const criada = await inspecoesApi.criar({ equipamentoId, ...payload });
 
       if (artFile) {
         try { await inspecoesApi.uploadArt(criada.id, artFile); }
@@ -253,8 +400,41 @@ export function InspecaoForm({ equipamentoId, categoria, prazosAtuais, onSaved }
   const max = categoria ? PRAZOS_NR13[categoria] : null;
 
   return (
-    <div className="bg-gray-50 border border-gray-200 rounded-xl p-5 mb-5">
-      <h3 className="text-sm font-semibold text-gray-700 mb-4">Registrar nova inspeção</h3>
+    <div className="p-5">
+
+      {/* Barra de template — só no modo de criação */}
+      {!editando && (
+        <div className="flex items-center justify-between flex-wrap gap-2 mb-4 bg-primary-50 border border-primary-100 rounded-lg px-3 py-2">
+          <div className="text-xs text-gray-600 flex items-center gap-1.5">
+            <ClipboardList size={13} className="text-primary-600" />
+            {temTemplate ? (
+              <span>
+                Há um template salvo{templateInfo ? ` em ${templateInfo}` : ''}.
+                Aplique-o para repetir as especificações em outra inspeção do mesmo dia.
+              </span>
+            ) : (
+              <span>
+                Preencha os dados e salve como template para reutilizar em inspeções do mesmo dia.
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {temTemplate && (
+              <>
+                <button type="button" className="btn btn-sm" onClick={aplicarTemplate}>
+                  <ClipboardList size={12} /> Usar template
+                </button>
+                <button type="button" className="btn btn-sm btn-danger" onClick={limparTemplate} title="Remover template salvo">
+                  <Trash2 size={12} />
+                </button>
+              </>
+            )}
+            <button type="button" className="btn btn-sm" onClick={salvarComoTemplate}>
+              <Save size={12} /> Salvar como template
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-3 gap-3 mb-3">
         <div>
@@ -315,6 +495,20 @@ export function InspecaoForm({ equipamentoId, categoria, prazosAtuais, onSaved }
       <hr className="my-4 border-gray-200" />
 
       <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">ART (PDF anexo)</div>
+      {editando && inspecao?.art_filename && !artFile && (
+        <div className="flex items-center gap-3 bg-white border border-gray-200 rounded-lg p-3 mb-2">
+          <FileText className="text-primary-600" size={18} />
+          <a
+            href={`/uploads/${encodeURIComponent(inspecao.art_filename)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex-1 text-sm font-medium text-primary-700 hover:underline truncate"
+          >
+            ART atual anexada — clique para abrir
+          </a>
+          <span className="text-xs text-gray-400">Envie um novo PDF abaixo para substituir</span>
+        </div>
+      )}
       {artFile ? (
         <div className="flex items-center gap-3 bg-white border border-gray-200 rounded-lg p-3 mb-4">
           <FileText className="text-primary-600" size={18} />
@@ -331,7 +525,11 @@ export function InspecaoForm({ equipamentoId, categoria, prazosAtuais, onSaved }
         <label className="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-gray-300
           rounded-lg p-4 mb-4 cursor-pointer hover:border-primary-400 hover:bg-primary-50 transition-colors">
           <Upload className="text-gray-300" size={20} />
-          <span className="text-sm text-gray-500">Clique para anexar a ART em PDF</span>
+          <span className="text-sm text-gray-500">
+            {editando && inspecao?.art_filename
+              ? 'Clique para substituir a ART em PDF'
+              : 'Clique para anexar a ART em PDF'}
+          </span>
           <span className="text-xs text-gray-400">Apenas PDF — máx 10 MB</span>
           <input
             type="file"
@@ -342,22 +540,27 @@ export function InspecaoForm({ equipamentoId, categoria, prazosAtuais, onSaved }
         </label>
       )}
 
-      <div className="flex items-center justify-between mb-3">
-        <div>
-          <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Documentação complementar</div>
-          <div className="text-xs text-gray-400 mt-0.5">
-            Todo documento cadastrado aqui será anexado ao relatório final. O tipo pode ser qualquer descrição — sugestões na lista.
+      {/* Documentação complementar — só no modo de criação.
+          Em edição, fotos/ultrassom/dispositivos são geridos na tabela e
+          permanecem inalterados ao editar os dados da inspeção. */}
+      {!editando && (
+        <>
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Documentação complementar</div>
+              <div className="text-xs text-gray-400 mt-0.5">
+                Todo documento cadastrado aqui será anexado ao relatório final. O tipo pode ser qualquer descrição — sugestões na lista.
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setDisp(list => [...list, { tipo: '', file: null }])}
+            >
+              <Plus size={12} /> Adicionar documento
+            </button>
           </div>
-        </div>
-        <button
-          type="button"
-          className="btn btn-sm"
-          onClick={() => setDisp(list => [...list, { tipo: '', file: null }])}
-        >
-          <Plus size={12} /> Adicionar documento
-        </button>
-      </div>
-      {disp.length > 0 && (
+          {disp.length > 0 && (
         <div className="flex flex-col gap-3 mb-4">
           {disp.map((d, idx) => (
             <div key={idx} className="bg-white border border-gray-200 rounded-xl p-4">
@@ -486,6 +689,18 @@ export function InspecaoForm({ equipamentoId, categoria, prazosAtuais, onSaved }
           ))}
         </div>
       )}
+        </>
+      )}
+
+      {editando && (
+        <div className="mb-4 text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded-lg p-3 flex items-start gap-2">
+          <AlertTriangle size={13} className="text-gray-400 mt-0.5 flex-shrink-0" />
+          <span>
+            Fotos, ultrassom e dispositivos de segurança permanecem inalterados ao editar.
+            Para alterá-los, use as abas da inspeção na tabela de histórico.
+          </span>
+        </div>
+      )}
 
       <div className="flex items-center justify-between mb-3">
         <div>
@@ -571,11 +786,16 @@ export function InspecaoForm({ equipamentoId, categoria, prazosAtuais, onSaved }
           placeholder="Descreva as recomendações, condições observadas, anomalias encontradas..." />
       </div>
 
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        {onCancel && (
+          <button type="button" onClick={onCancel} disabled={saving} className="btn">
+            Cancelar
+          </button>
+        )}
         <ConfirmDialog
-          title="Confirmar registro"
+          title={editando ? 'Confirmar alterações' : 'Confirmar registro'}
           message={
-            `Registrar a inspeção e salvar os prazos? ` +
+            (editando ? 'Salvar as alterações desta inspeção? ' : 'Registrar a inspeção e salvar os prazos? ') +
             `Externo: ${form.proxExterno ? fmtData(form.proxExterno) : '—'} • ` +
             `Interno: ${form.proxInterno ? fmtData(form.proxInterno) : '—'} • ` +
             `Hidrostático: ${form.proxHidro ? fmtData(form.proxHidro) : '—'}`
@@ -584,7 +804,9 @@ export function InspecaoForm({ equipamentoId, categoria, prazosAtuais, onSaved }
           onConfirm={salvar}
           trigger={open => (
             <button onClick={open} disabled={saving} className="btn btn-primary">
-              {saving ? 'Salvando...' : 'Registrar inspeção'}
+              {saving
+                ? 'Salvando...'
+                : editando ? 'Salvar alterações' : 'Registrar inspeção'}
             </button>
           )}
         />
