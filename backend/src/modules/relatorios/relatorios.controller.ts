@@ -25,4 +25,24 @@ export class RelatoriosController {
 
     res.end(buffer);
   }
+
+  @Get('docx/:equipamentoId')
+  async gerarDOCX(
+    @Param('equipamentoId') equipamentoId: string,
+    @Query('download') download: string,
+    @Query('inspecaoId') inspecaoId: string,
+    @Res() res: Response,
+  ) {
+    const buffer = await this.relatoriosService.gerarDOCX(equipamentoId, inspecaoId || undefined);
+
+    const isDownload = download === '1' || download === 'true';
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'Content-Disposition': `${isDownload ? 'attachment' : 'inline'}; filename="relatorio-${equipamentoId}.docx"`,
+      'Content-Length': buffer.length,
+      'Cache-Control': 'no-cache',
+    });
+
+    res.end(buffer);
+  }
 }

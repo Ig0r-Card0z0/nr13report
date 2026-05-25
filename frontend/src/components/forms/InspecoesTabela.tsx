@@ -11,7 +11,7 @@ import { MedicaoEspessuraForm } from './MedicaoEspessuraForm';
 import { InspecaoForm } from './InspecaoForm';
 import {
   ChevronDown, ChevronRight, Trash2, FileText, Image as ImageIcon,
-  Activity, Download, AlertTriangle, Check, Eye, X, Paperclip, Upload, Pencil,
+  Activity, Download, AlertTriangle, Check, Eye, X, Paperclip, Upload, Pencil, FileType,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
@@ -127,6 +127,7 @@ function RowGroup({
   const metalBase = equipamento.metal_base;
   const podeBaixarPDF = status.key === 'completa';
   const pdfHref = relatoriosApi.urlPDFInspecaoDownload(equipamentoId, ins.id);
+  const docxHref = relatoriosApi.urlDOCXInspecaoDownload(equipamentoId, ins.id);
   const [docTab, setDocTab] = useState<'fotos' | 'ultrassom' | 'pdf' | 'seguranca'>('fotos');
   const [anexosSeg, setAnexosSeg] = useState<AnexoSeguranca[]>([]);
   const [loadingSeg, setLoadingSeg] = useState(false);
@@ -337,6 +338,14 @@ function RowGroup({
                             className="btn btn-sm btn-primary"
                           >
                             <Download size={12} /> Gerar e baixar PDF
+                          </a>
+                          <a
+                            href={docxHref}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="btn btn-sm"
+                          >
+                            <FileType size={12} /> Gerar e baixar Word
                           </a>
                           <span className="text-xs text-gray-400">
                             O PDF reúne capa, dados do equipamento, fotos, ultrassom, ART e calibrações.

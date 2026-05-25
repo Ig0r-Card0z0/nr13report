@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react';
 import { Equipamento, Inspecao, Foto, MedicaoEspessura } from '@/types';
 import { relatoriosApi } from '@/lib/api';
 import { fmtData } from '@/lib/utils';
-import { Download, FileText, CheckCircle, Eye, X } from 'lucide-react';
+import { Download, FileText, CheckCircle, Eye, X, FileType } from 'lucide-react';
 
 interface Props {
   equipamento: Equipamento;
@@ -18,6 +18,7 @@ export function RelatorioPDF({ equipamento: eq, inspecoes, fotos, medicao, inspe
   const [previewOpen, setPreviewOpen] = useState(false);
   const pdfUrl = inspecaoId ? relatoriosApi.urlPDFInspecao(eq.id, inspecaoId) : relatoriosApi.urlPDF(eq.id);
   const pdfUrlDownload = inspecaoId ? relatoriosApi.urlPDFInspecaoDownload(eq.id, inspecaoId) : relatoriosApi.urlPDFDownload(eq.id);
+  const docxUrlDownload = inspecaoId ? relatoriosApi.urlDOCXInspecaoDownload(eq.id, inspecaoId) : relatoriosApi.urlDOCXDownload(eq.id);
 
   const itens = useMemo(() => ([
     { label: 'Identificação do equipamento', ok: !!eq.tag },
@@ -104,6 +105,15 @@ export function RelatorioPDF({ equipamento: eq, inspecoes, fotos, medicao, inspe
           >
             <Download size={20} />
             Gerar e baixar PDF
+          </a>
+          <a
+            href={docxUrlDownload}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn px-10 py-3 text-base inline-flex items-center gap-3 justify-center"
+          >
+            <Download size={20} />
+            Gerar e baixar Word
           </a>
         </div>
 

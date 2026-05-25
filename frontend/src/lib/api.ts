@@ -145,6 +145,10 @@ export const relatoriosApi = {
   urlPDFInspecao: (equipamentoId: string, inspecaoId: string) => `/api/relatorios/pdf/${equipamentoId}?inspecaoId=${encodeURIComponent(inspecaoId)}`,
   urlPDFInspecaoDownload: (equipamentoId: string, inspecaoId: string) =>
     `/api/relatorios/pdf/${equipamentoId}?download=1&inspecaoId=${encodeURIComponent(inspecaoId)}`,
+  // Relatório em formato Word (.docx)
+  urlDOCXDownload: (equipamentoId: string) => `/api/relatorios/docx/${equipamentoId}?download=1`,
+  urlDOCXInspecaoDownload: (equipamentoId: string, inspecaoId: string) =>
+    `/api/relatorios/docx/${equipamentoId}?download=1&inspecaoId=${encodeURIComponent(inspecaoId)}`,
 };
 
 // ── Health ────────────────────────────────────────────

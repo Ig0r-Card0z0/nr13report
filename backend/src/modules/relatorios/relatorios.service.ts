@@ -6,6 +6,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { PDFDocument as PDFLibDocument } from 'pdf-lib';
 import sharp from 'sharp';
+import { gerarDOCXBuffer } from './relatorios-docx';
 
 type FotoPrep = {
   buffer: Buffer | null;
@@ -162,7 +163,7 @@ export class RelatoriosService {
         return { buffer: null, w: 4, h: 3, legenda, numero: f.numero };
       }
       try {
-        const buffer = await sharp(fp).rotate().toBuffer();
+        const buffer = await sharp(fp).rotate().jpeg({ quality: 85 }).toBuffer();
         const meta = await sharp(buffer).metadata();
         return {
           buffer,
@@ -183,7 +184,7 @@ export class RelatoriosService {
       const capaPath = path.join(process.cwd(), 'uploads', fotoCapa.filename);
       if (fs.existsSync(capaPath)) {
         try {
-          const buffer = await sharp(capaPath).rotate().toBuffer();
+          const buffer = await sharp(capaPath).rotate().jpeg({ quality: 85 }).toBuffer();
           const meta = await sharp(buffer).metadata();
           capaPrep = {
             buffer,
@@ -205,7 +206,7 @@ export class RelatoriosService {
       if (fs.existsSync(logoPath)) {
         try {
           // Mantém transparência (PNG) — sem flatten, fundo fica vazado.
-          const buffer = await sharp(logoPath).rotate().toBuffer();
+          const buffer = await sharp(logoPath).rotate().png().toBuffer();
           const meta = await sharp(buffer).metadata();
           clienteLogoPrep = {
             buffer,
@@ -543,9 +544,14 @@ export class RelatoriosService {
 
       // ── Logo do cliente (sem fundo, transparência preservada) ────────────
       if (clienteLogoPrep) {
-        const lX = ML + (TW - logoDrawW) / 2;
-        doc.image(clienteLogoPrep.buffer, lX, y, { fit: [logoDrawW, logoDrawH] });
-        y += logoDrawH + gap;
+        try {
+          const lX = ML + (TW - logoDrawW) / 2;
+          doc.image(clienteLogoPrep.buffer, lX, y, { fit: [logoDrawW, logoDrawH] });
+          y += logoDrawH + gap;
+        } catch {
+          // Logo em formato inválido — pula sem derrubar o relatório.
+          y += logoDrawH + gap;
+        }
       }
 
       // ── Foto do equipamento (sem fundo: caixa branca/vazada) ─────────────
@@ -1367,5 +1373,173 @@ export class RelatoriosService {
       // Falha no merge — devolve o relatório principal sem anexos.
       return baseBuffer;
     }
+  }
+
+  /**
+   * Gera o relatório de inspeção NR-13 em formato Word (.docx).
+   * Réplica do PDF (gerarPDF). Reusa as mesmas queries de carga de dados e
+   * o mesmo pré-processamento de imagens; a montagem do documento fica em
+   * relatorios-docx.ts. Não mescla anexos PDF (limitação do formato Word).
+   */
+  async gerarDOCX(equipamentoId: string, inspecaoId?: string): Promise<Buffer> {
+    const db = this.db.instance;
+
+    const eq = db.prepare(`
+      SELECT e.*,
+             c.nome    AS cli_nome,  c.cnpj,        c.tel,   c.email,
+             c.logradouro,           c.numero        AS cli_num,
+             c.bairro,               c.cidade,       c.uf,
+             c.responsavel,          c.cargo,
+             c.logo_filename AS cli_logo
+      FROM equipamentos e
+      JOIN clientes c ON e.cliente_id = c.id
+      WHERE e.id = ?
+    `).get(equipamentoId) as any;
+    if (!eq) throw new NotFoundException('Equipamento não encontrado');
+
+    const insp = inspecaoId
+      ? db.prepare(`SELECT * FROM inspecoes WHERE id = ? AND equipamento_id = ?`)
+          .get(inspecaoId, equipamentoId) as any
+      : db.prepare(`SELECT * FROM inspecoes WHERE equipamento_id = ? ORDER BY data DESC LIMIT 1`)
+          .get(equipamentoId) as any;
+    if (inspecaoId && !insp) throw new NotFoundException('Inspeção não encontrada para este equipamento');
+
+    const me = inspecaoId
+      ? db.prepare(`SELECT * FROM medicoes_espessura WHERE inspecao_id = ? ORDER BY criado_em DESC LIMIT 1`)
+          .get(inspecaoId) as any
+      : db.prepare(`SELECT * FROM medicoes_espessura WHERE equipamento_id = ? ORDER BY criado_em DESC LIMIT 1`)
+          .get(equipamentoId) as any;
+
+    const pontos: any[] = me
+      ? db.prepare(`SELECT * FROM pontos_me WHERE medicao_id = ? ORDER BY ordem`).all(me.id)
+      : [];
+
+    const fotos: any[] = inspecaoId
+      ? db.prepare(`SELECT * FROM fotos WHERE inspecao_id = ? ORDER BY numero`).all(inspecaoId)
+      : db.prepare(`SELECT * FROM fotos WHERE equipamento_id = ? ORDER BY numero`).all(equipamentoId);
+
+    const fotoCapa: any = eq.foto_capa_id
+      ? db.prepare(`SELECT * FROM fotos WHERE id = ?`).get(eq.foto_capa_id)
+      : null;
+
+    const instrumentos: any[] = insp
+      ? db.prepare(`
+          SELECT im.* FROM inspecao_instrumentos ii
+          JOIN instrumentos_medicao im ON im.id = ii.instrumento_id
+          WHERE ii.inspecao_id = ? ORDER BY im.nome
+        `).all(insp.id)
+      : [];
+
+    // ── Derivados (idênticos ao gerarPDF) ──────────────────────────────────
+    const pmta   = parseFloat(eq.pmta)   || 0;
+    const vol    = parseFloat(eq.volume) || 0;
+    const pvMpa  = pmta * 0.1 * vol;
+    const cat    = eq.categoria     || 'V';
+    const grp    = eq.grupo_risco   || 'Grupo 5';
+    const classe = eq.classe_fluido || 'C';
+    const dtInsp = insp?.data || new Date().toISOString().split('T')[0];
+    const phNome = insp?.ph_nome  || 'Igor Cardozo e Oliveira Santos';
+    const phCrea = insp?.ph_crea  || '041725365-6';
+    const art    = insp?.art      || '—';
+    const numRel = `001/${new Date().getFullYear()}`;
+
+    // ── Pré-processamento de imagens (sharp → JPEG/PNG) ────────────────────
+    const fdt = (v?: string | null): string => {
+      if (!v) return '—';
+      const ds = String(v).trim().slice(0, 10);
+      if (!ds || ds.length < 10) return '—';
+      const d = ds.split('-');
+      return d.length === 3 && d[0].length === 4 ? `${d[2]}/${d[1]}/${d[0]}` : '—';
+    };
+
+    const fotosPrep = await Promise.all(fotos.map(async (f: any) => {
+      const fp = path.join(process.cwd(), 'uploads', f.filename);
+      const legenda = f.legenda || `${f.numero} – ${eq.tag}`;
+      if (!fs.existsSync(fp)) return { buffer: null, w: 4, h: 3, legenda, numero: f.numero };
+      try {
+        const buffer = await sharp(fp).rotate().jpeg({ quality: 85 }).toBuffer();
+        const meta = await sharp(buffer).metadata();
+        return { buffer, w: meta.width || 4, h: meta.height || 3, legenda, numero: f.numero };
+      } catch {
+        return { buffer: null, w: 4, h: 3, legenda, numero: f.numero };
+      }
+    }));
+
+    let capaPrep: { buffer: Buffer; w: number; h: number; legenda: string } | null = null;
+    if (fotoCapa?.filename) {
+      const cp = path.join(process.cwd(), 'uploads', fotoCapa.filename);
+      if (fs.existsSync(cp)) {
+        try {
+          const buffer = await sharp(cp).rotate().jpeg({ quality: 85 }).toBuffer();
+          const meta = await sharp(buffer).metadata();
+          capaPrep = { buffer, w: meta.width || 4, h: meta.height || 3,
+                       legenda: fotoCapa.legenda || `Vista geral – ${eq.tag}` };
+        } catch { capaPrep = null; }
+      }
+    }
+
+    let clienteLogoPrep: { buffer: Buffer; w: number; h: number } | null = null;
+    if (eq.cli_logo) {
+      const lp = path.join(process.cwd(), 'uploads', eq.cli_logo);
+      if (fs.existsSync(lp)) {
+        try {
+          const buffer = await sharp(lp).rotate().png().toBuffer();
+          const meta = await sharp(buffer).metadata();
+          clienteLogoPrep = { buffer, w: meta.width || 4, h: meta.height || 3 };
+        } catch { clienteLogoPrep = null; }
+      }
+    }
+
+    // Logo NORT.END do header (assets/logo_nortend.png)
+    let logoNortendBuffer: Buffer | null = null;
+    const logoPath = path.join(process.cwd(), 'assets', 'logo_nortend.png');
+    if (fs.existsSync(logoPath)) {
+      try {
+        logoNortendBuffer = await sharp(logoPath).png().toBuffer();
+      } catch { logoNortendBuffer = null; }
+    }
+
+    // ── Seção 5.2: linhas de documentação gerada ───────────────────────────
+    const docsGerados: string[] = ['Relatório de Inspeção;'];
+    if (insp?.art) {
+      const artFile = insp.art_filename ? ' (PDF anexo)' : '';
+      docsGerados.push(`Anotação de Responsabilidade Técnica (ART) nº ${insp.art}${artFile};`);
+    } else if (insp?.art_filename) {
+      docsGerados.push('Anotação de Responsabilidade Técnica (ART) – PDF anexo;');
+    }
+    instrumentos.forEach((im: any) => {
+      const certNum = im.certificado_numero ? ` nº ${im.certificado_numero}` : '';
+      const validade = im.validade_calibracao ? ` (validade ${fdt(im.validade_calibracao)})` : '';
+      const anexo = im.certificado_filename ? ' – PDF anexo' : '';
+      docsGerados.push(`Certificado de calibração ${im.nome}${certNum}${validade}${anexo};`);
+    });
+    const docsComplementares: any[] = insp
+      ? db.prepare(`SELECT * FROM inspecao_dispositivos_seguranca WHERE inspecao_id = ? ORDER BY criado_em`)
+          .all(insp.id)
+      : [];
+    docsComplementares.forEach((d: any) => {
+      const tipo = d.tipo || 'Documento complementar';
+      const desc = d.descricao ? ` – ${d.descricao}` : '';
+      const certNum = d.certificado_numero ? ` nº ${d.certificado_numero}` : '';
+      const validade = d.validade_calibracao ? ` (validade ${fdt(d.validade_calibracao)})` : '';
+      const anexo = d.certificado_filename ? ' – PDF anexo' : '';
+      docsGerados.push(`${tipo}${desc}${certNum}${validade}${anexo};`);
+    });
+    const docsAvulsos: any[] = insp
+      ? db.prepare(`SELECT * FROM inspecao_anexos_seguranca WHERE inspecao_id = ? ORDER BY criado_em`)
+          .all(insp.id)
+      : [];
+    docsAvulsos.forEach((a: any) => {
+      const nome = a.descricao || a.nome_original || 'Documento complementar';
+      const tipoArquivo = a.mimetype && /image/.test(a.mimetype) ? ' – imagem anexa' : ' – PDF anexo';
+      docsGerados.push(`${nome}${tipoArquivo};`);
+    });
+    if (docsGerados.length === 1) docsGerados.push('Registro no Livro de Segurança;');
+
+    return gerarDOCXBuffer({
+      eq, insp, me, pontos, instrumentos, fotosPrep, capaPrep, clienteLogoPrep,
+      docsGerados, logoNortendBuffer,
+      derivados: { pmta, vol, pvMpa, cat, grp, classe, dtInsp, phNome, phCrea, art, numRel },
+    });
   }
 }
