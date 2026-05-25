@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from '../../database/database.service';
 import { v4 as uuidv4 } from 'uuid';
 import { existsSync, mkdirSync, unlinkSync } from 'fs';
@@ -25,6 +25,8 @@ export class FotosService {
   }
 
   async create(equipamentoId: string, inspecaoId: string | null, file: Express.Multer.File, legenda: string) {
+    if (!file) throw new BadRequestException('Nenhum arquivo recebido no upload.');
+    if (!equipamentoId) throw new BadRequestException('equipamentoId é obrigatório.');
     const tx = this.db.instance.transaction(() => {
       const next = (this.db.instance.prepare(
         'SELECT COALESCE(MAX(numero), 0) + 1 as n FROM fotos WHERE equipamento_id = ?'
