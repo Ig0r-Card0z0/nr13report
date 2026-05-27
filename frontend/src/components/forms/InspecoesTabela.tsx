@@ -9,9 +9,11 @@ import { Tabs } from '@/components/ui/Tabs';
 import { FotoRelatorio } from './FotoRelatorio';
 import { MedicaoEspessuraForm } from './MedicaoEspessuraForm';
 import { InspecaoForm } from './InspecaoForm';
+import { EditorResultadoInspecao, Overrides } from './EditorResultadoInspecao';
 import {
   ChevronDown, ChevronRight, Trash2, FileText, Image as ImageIcon,
   Activity, Download, AlertTriangle, Check, Eye, X, Paperclip, Upload, Pencil, FileType,
+  SlidersHorizontal,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
@@ -126,9 +128,12 @@ function RowGroup({
 }: RowProps) {
   const metalBase = equipamento.metal_base;
   const podeBaixarPDF = status.key === 'completa';
-  const pdfHref = relatoriosApi.urlPDFInspecaoDownload(equipamentoId, ins.id);
-  const docxHref = relatoriosApi.urlDOCXInspecaoDownload(equipamentoId, ins.id);
-  const [docTab, setDocTab] = useState<'fotos' | 'ultrassom' | 'pdf' | 'seguranca'>('fotos');
+  // Ajustes da seção 4 (Resultado da Inspeção) válidos só para esta geração.
+  const [overrides, setOverrides] = useState<Overrides>({});
+  const qtdOverrides = Object.keys(overrides).length;
+  const pdfHref = relatoriosApi.urlPDFInspecaoDownload(equipamentoId, ins.id, overrides);
+  const docxHref = relatoriosApi.urlDOCXInspecaoDownload(equipamentoId, ins.id, overrides);
+  const [docTab, setDocTab] = useState<'fotos' | 'ultrassom' | 'pdf' | 'seguranca' | 'resultado'>('fotos');
   const [anexosSeg, setAnexosSeg] = useState<AnexoSeguranca[]>([]);
   const [loadingSeg, setLoadingSeg] = useState(false);
   const [uploadingSeg, setUploadingSeg] = useState(false);
@@ -286,6 +291,7 @@ function RowGroup({
                   { id: 'fotos', label: 'Relatório fotográfico', icon: ImageIcon, badge: ins.total_fotos ?? 0 },
                   { id: 'ultrassom', label: 'Ultrassom', icon: Activity, badge: ins.total_pontos_me ?? 0 },
                   { id: 'seguranca', label: 'Dispositivos', icon: Paperclip, badge: anexosSeg.length },
+                  { id: 'resultado', label: 'Resultado da Inspeção', icon: SlidersHorizontal, badge: qtdOverrides },
                   { id: 'pdf', label: 'Gerar Relatório', icon: FileText },
                 ]}
                 active={docTab}
@@ -321,6 +327,16 @@ function RowGroup({
               </div>
 
               <div
+                id={`insp-${ins.id}-panel-resultado`}
+                role="tabpanel"
+                aria-labelledby={`insp-${ins.id}-tab-resultado`}
+                hidden={docTab !== 'resultado'}
+              >
+                {/* Mantido montado para preservar estado interno entre trocas de aba. */}
+                <EditorResultadoInspecao onChange={setOverrides} />
+              </div>
+
+              <div
                 id={`insp-${ins.id}-panel-pdf`}
                 role="tabpanel"
                 aria-labelledby={`insp-${ins.id}-tab-pdf`}
@@ -330,6 +346,21 @@ function RowGroup({
                   <>
                     {podeBaixarPDF ? (
                       <div>
+                        {qtdOverrides > 0 && (
+                          <div className="mb-3 flex items-center gap-2 text-xs bg-primary-50 border border-primary-200 rounded-lg px-3 py-2 text-primary-800">
+                            <SlidersHorizontal size={13} className="text-primary-700" />
+                            <span>
+                              <strong>{qtdOverrides}</strong> {qtdOverrides === 1 ? 'item ajustado' : 'itens ajustados'} na aba <strong>Resultado da Inspeção</strong> serão aplicados.
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setDocTab('resultado')}
+                              className="ml-auto text-primary-700 hover:underline font-medium"
+                            >
+                              Revisar
+                            </button>
+                          </div>
+                        )}
                         <div className="flex items-center gap-3 flex-wrap mb-3">
                           <a
                             href={pdfHref}
@@ -353,7 +384,7 @@ function RowGroup({
                         </div>
                         <div className="border border-gray-200 rounded-lg overflow-hidden bg-gray-100">
                           <iframe
-                            src={relatoriosApi.urlPDFInspecao(equipamentoId, ins.id)}
+                            src={relatoriosApi.urlPDFInspecao(equipamentoId, ins.id, overrides)}
                             className="w-full h-[70vh]"
                             title="Pré-visualização do relatório PDF"
                           />

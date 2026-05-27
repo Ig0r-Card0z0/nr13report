@@ -14,6 +14,10 @@ import {
   Header, Footer, AlignmentType, BorderStyle, WidthType, ShadingType,
   VerticalAlignTable, ImageRun, PageNumber, PageBreak,
 } from 'docx';
+import {
+  ResultadoOverrides, resolverSim, resolverTipoInspecao, resolverDataRecPH, resolverObs,
+  obsConclusaoTipo, TipoInspecaoMarcado,
+} from './resultado-overrides';
 
 // ─── Cores da marca NORT.END (hex sem #, como o docx exige) ──────────────────
 const K = {
@@ -49,6 +53,7 @@ export interface DocxInput {
   clienteLogoPrep: { buffer: Buffer; w: number; h: number } | null;
   docsGerados: string[];        // linhas da seção 5.2 já montadas pelo service
   logoNortendBuffer: Buffer | null; // assets/logo_nortend.png, se existir
+  overrides: ResultadoOverrides;    // sobrescritas manuais da seção 4 (vazio = defaults)
   derivados: {
     pmta: number; vol: number; pvMpa: number; cat: string; grp: string;
     classe: string; dtInsp: string; phNome: string; phCrea: string;
@@ -310,6 +315,7 @@ function imagemCentral(buffer: Buffer, w: number, h: number, maxW: number, maxH:
 export async function gerarDOCXBuffer(input: DocxInput): Promise<Buffer> {
   const { eq, insp, me, pontos, instrumentos, fotosPrep, capaPrep,
           clienteLogoPrep, docsGerados, logoNortendBuffer, derivados } = input;
+  const ov: ResultadoOverrides = input.overrides || {};
   const { pmta, vol, pvMpa, cat, grp, classe, dtInsp, phNome, phCrea, art, numRel } = derivados;
 
   const children: (Paragraph | Table)[] = [];
@@ -441,8 +447,12 @@ export async function gerarDOCXBuffer(input: DocxInput): Promise<Buffer> {
   const recomendacoesPraticadas = insp?.observacoes?.includes('recomendação') || false;
   children.push(subSecao('4.1 EXAME DOS PRONTUÁRIOS'));
   children.push(tabelaChecklist([
-    { n: 1, desc: 'A presente inspeção foi iniciada dentro do prazo para isso fixado na NR-13?', sim: inspecaoNoInicio },
-    { n: 2, desc: 'As recomendações anteriores foram devidamente postas em prática?', sim: recomendacoesPraticadas },
+    { n: 1, desc: 'A presente inspeção foi iniciada dentro do prazo para isso fixado na NR-13?',
+      sim: resolverSim(ov, 'prontuarios.1', inspecaoNoInicio),
+      obs: resolverObs(ov, 'prontuarios.1', '') },
+    { n: 2, desc: 'As recomendações anteriores foram devidamente postas em prática?',
+      sim: resolverSim(ov, 'prontuarios.2', recomendacoesPraticadas),
+      obs: resolverObs(ov, 'prontuarios.2', '') },
   ]));
 
   const vasoFunciona = insp?.resultado !== 'Inapto';
@@ -450,51 +460,80 @@ export async function gerarDOCXBuffer(input: DocxInput): Promise<Buffer> {
   const anomaliaObservada = insp?.resultado === 'Inapto' || insp?.observacoes?.includes('anomalia') || false;
   children.push(subSecao('EXAME EXTERNO DO EQUIPAMENTO'));
   children.push(tabelaChecklist([
-    { n: 1, desc: 'O vaso de pressão funciona normalmente?', sim: vasoFunciona },
-    { n: 2, desc: 'O vaso de pressão satisfaz a todas as condições de segurança desta Norma NR-13 observáveis neste exame?', sim: equipSatisfazSeguranca },
-    { n: 3, desc: 'A parte de caracterização do equipamento (placa de identificação) acessível ao exame confere com o que, sobre elas constam dos prontuários?', sim: true },
-    { n: 4, desc: 'Foi observada alguma anomalia capaz de prejudicar a segurança?', sim: anomaliaObservada },
-    { n: 5, desc: 'Além do exame normal, foi realizado o exame externo complementar com este parado?', sim: false },
-    { n: 6, desc: 'Foram calibrados os manômetros e válvulas de segurança?', sim: true, obs: 'Todos os certificados dos instrumentos estão em anexo.' },
+    { n: 1, desc: 'O vaso de pressão funciona normalmente?',
+      sim: resolverSim(ov, 'externo.1', vasoFunciona),
+      obs: resolverObs(ov, 'externo.1', '') },
+    { n: 2, desc: 'O vaso de pressão satisfaz a todas as condições de segurança desta Norma NR-13 observáveis neste exame?',
+      sim: resolverSim(ov, 'externo.2', equipSatisfazSeguranca),
+      obs: resolverObs(ov, 'externo.2', '') },
+    { n: 3, desc: 'A parte de caracterização do equipamento (placa de identificação) acessível ao exame confere com o que, sobre elas constam dos prontuários?',
+      sim: resolverSim(ov, 'externo.3', true),
+      obs: resolverObs(ov, 'externo.3', '') },
+    { n: 4, desc: 'Foi observada alguma anomalia capaz de prejudicar a segurança?',
+      sim: resolverSim(ov, 'externo.4', anomaliaObservada),
+      obs: resolverObs(ov, 'externo.4', '') },
+    { n: 5, desc: 'Além do exame normal, foi realizado o exame externo complementar com este parado?',
+      sim: resolverSim(ov, 'externo.5', false),
+      obs: resolverObs(ov, 'externo.5', '') },
+    { n: 6, desc: 'Foram calibrados os manômetros e válvulas de segurança?',
+      sim: resolverSim(ov, 'externo.6', true),
+      obs: resolverObs(ov, 'externo.6', 'Todos os certificados dos instrumentos estão em anexo.') },
   ]));
 
   const anomaliaInterna = insp?.observacoes?.includes('anomalia interna') || false;
   children.push(subSecao('4.3 EXAME INTERNO'));
   children.push(tabelaChecklist([
-    { n: 1, desc: 'O vaso de pressão antes de ser limpo, apresentava alguma anomalia?', sim: anomaliaInterna },
-    { n: 2, desc: 'Internamente, o vaso de pressão depois de limpo, está em ordem e satisfaz todas as condições de segurança constante da NBR 12177 da ABNT?', sim: !anomaliaInterna },
-    { n: 3, desc: 'A parte da caracterização do vaso acessível a esse exame confere com o que sobre a mesma consta no prontuário?', sim: true },
-    { n: 4, desc: 'Foi observada alguma anomalia capaz de prejudicar a segurança?', sim: anomaliaInterna },
+    { n: 1, desc: 'O vaso de pressão antes de ser limpo, apresentava alguma anomalia?',
+      sim: resolverSim(ov, 'interno.1', anomaliaInterna),
+      obs: resolverObs(ov, 'interno.1', '') },
+    { n: 2, desc: 'Internamente, o vaso de pressão depois de limpo, está em ordem e satisfaz todas as condições de segurança constante da NBR 12177 da ABNT?',
+      sim: resolverSim(ov, 'interno.2', !anomaliaInterna),
+      obs: resolverObs(ov, 'interno.2', '') },
+    { n: 3, desc: 'A parte da caracterização do vaso acessível a esse exame confere com o que sobre a mesma consta no prontuário?',
+      sim: resolverSim(ov, 'interno.3', true),
+      obs: resolverObs(ov, 'interno.3', '') },
+    { n: 4, desc: 'Foi observada alguma anomalia capaz de prejudicar a segurança?',
+      sim: resolverSim(ov, 'interno.4', anomaliaInterna),
+      obs: resolverObs(ov, 'interno.4', '') },
   ]));
 
   children.push(barraSecao('ATUALIZAÇÃO DA PMTA'));
   children.push(tabelaChecklist([
-    { n: 1, desc: `A atual PMTA de ${fn(pmta)} bar pode ser mantida?`, sim: true,
-      obs: 'PMTA definida conforme memória de cálculo contida no prontuário do vaso de pressão.' },
+    { n: 1, desc: `A atual PMTA de ${fn(pmta)} bar pode ser mantida?`,
+      sim: resolverSim(ov, 'pmta.1', true),
+      obs: resolverObs(ov, 'pmta.1', 'PMTA definida conforme memória de cálculo contida no prontuário do vaso de pressão.') },
   ]));
 
   const precisoTesteHidro = insp?.tipo === 'Interna' || false;
   children.push(barraSecao('ENSAIO HIDROSTÁTICO'));
   children.push(tabelaChecklist([
-    { n: 1, desc: 'Foi realizado ensaio hidrostático?', sim: precisoTesteHidro,
-      obs: `O próximo teste hidrostático será realizado em ${fdt(eq.prox_hidro)}.` },
-    { n: 2, desc: 'Foi observada alguma anomalia capaz de prejudicar a segurança?', sim: false },
+    { n: 1, desc: 'Foi realizado ensaio hidrostático?',
+      sim: resolverSim(ov, 'hidro.1', precisoTesteHidro),
+      obs: resolverObs(ov, 'hidro.1', `O próximo teste hidrostático será realizado em ${fdt(eq.prox_hidro)}.`) },
+    { n: 2, desc: 'Foi observada alguma anomalia capaz de prejudicar a segurança?',
+      sim: resolverSim(ov, 'hidro.2', false),
+      obs: resolverObs(ov, 'hidro.2', '') },
   ]));
 
   const realizouME = !!me;
   children.push(barraSecao('OUTROS ENSAIOS'));
   children.push(tabelaChecklist([
-    { n: 1, desc: 'Foi realizado algum ensaio adicional?', sim: realizouME,
-      obs: realizouME ? 'Realizado ensaio de ME para verificar se houve perda de massa estrutural do vaso.' : '' },
+    { n: 1, desc: 'Foi realizado algum ensaio adicional?',
+      sim: resolverSim(ov, 'outros.1', realizouME),
+      obs: resolverObs(ov, 'outros.1', realizouME ? 'Realizado ensaio de ME para verificar se houve perda de massa estrutural do vaso.' : '') },
   ]));
 
   const apto = (insp?.resultado || 'Apto') === 'Apto';
   const aptoComRestricoes = (insp?.resultado || 'Apto') === 'Apto com restrições';
+  const tipoInspDocx: TipoInspecaoMarcado = resolverTipoInspecao(ov, 'periodica');
   children.push(barraSecao('CONCLUSÃO'));
   children.push(tabelaChecklist([
-    { n: 1, desc: 'O Vaso de Pressão inspecionado pode ser utilizado normalmente?', sim: apto || aptoComRestricoes, obs: insp?.observacoes || '' },
-    { n: 2, desc: 'O Vaso de Pressão deverá ser submetido a nova inspeção de segurança, de acordo com a NR-13 do M.T.E.', sim: true,
-      obs: `(${insp?.tipo === 'Interna' ? 'x' : ' '}) Periódica` },
+    { n: 1, desc: 'O Vaso de Pressão inspecionado pode ser utilizado normalmente?',
+      sim: resolverSim(ov, 'conclusao.1', apto || aptoComRestricoes),
+      obs: resolverObs(ov, 'conclusao.1', insp?.observacoes || '') },
+    { n: 2, desc: 'O Vaso de Pressão deverá ser submetido a nova inspeção de segurança, de acordo com a NR-13 do M.T.E.',
+      sim: resolverSim(ov, 'conclusao.2-sim', true),
+      obs: resolverObs(ov, 'conclusao.2-sim', obsConclusaoTipo(tipoInspDocx)) },
   ]));
 
   // ── MEMORIAL DE CÁLCULO ────────────────────────────────────────────────────
@@ -522,13 +561,16 @@ export async function gerarDOCXBuffer(input: DocxInput): Promise<Buffer> {
   children.push(paraTexto(
     'Conforme 13.4.4.4(a) a Inspeção Periódica com Exame Externo e Exame Interno, ' +
     'deve ser realizada no máximo em 12 meses.'));
+  const recExtDocx = resolverDataRecPH(ov, 'prox.externo.recph');
+  const recIntDocx = resolverDataRecPH(ov, 'prox.interno.recph');
+  const recHidDocx = resolverDataRecPH(ov, 'prox.hidro.recph');
   children.push(tabelaDados(
     ['Tipo de Inspeção', 'NR-13', 'Recom. PH', 'Data máx.'],
     [0.28, 0.18, 0.18, 0.36],
     [
-      ['Exame Externo', '5 anos', '1 ano', fdt(insp?.prox_externo || eq.prox_externo || '')],
-      ['Exame Interno', '10 anos', '5 anos', fdt(insp?.prox_interno || eq.prox_interno || '')],
-      ['Teste Hidrostático', '20 anos', '10 anos', fdt(eq.prox_hidro || '')],
+      ['Exame Externo', '5 anos', recExtDocx ? fdt(recExtDocx) : '1 ano', fdt(insp?.prox_externo || eq.prox_externo || '')],
+      ['Exame Interno', '10 anos', recIntDocx ? fdt(recIntDocx) : '5 anos', fdt(insp?.prox_interno || eq.prox_interno || '')],
+      ['Teste Hidrostático', '20 anos', recHidDocx ? fdt(recHidDocx) : '10 anos', fdt(eq.prox_hidro || '')],
     ],
   ));
 

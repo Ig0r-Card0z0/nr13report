@@ -135,7 +135,7 @@ export const CLASSES_FLUIDO_NR13: {
 
 export interface FluidoNR13 {
   nome: string;
-  classePadrao: ClasseFluido | null; // null = exige escolha manual
+  classePadrao: ClasseFluido;
   observacao?: string;
 }
 
@@ -148,7 +148,7 @@ export const FLUIDOS_NR13: FluidoNR13[] = [
   { nome: 'Hidrogênio',     classePadrao: 'A', observacao: 'Citado nominalmente pela NR-13 — classe A.' },
   { nome: 'Acetileno',      classePadrao: 'A', observacao: 'Citado nominalmente pela NR-13 — classe A.' },
   {
-    nome: 'Amônia (NH₃)',
+    nome: 'Amônia (NH3)',
     classePadrao: 'A',
     observacao: 'Tóxico com limite de tolerância ≤ 20 ppm (NR-15) — classe A.',
   },
@@ -158,19 +158,23 @@ export const FLUIDOS_NR13: FluidoNR13[] = [
     observacao: 'Combustível; default classe B (< 200 °C). Use classe A se a temperatura ≥ 200 °C.',
   },
   { nome: 'Água',           classePadrao: 'D' },
-  {
-    nome: 'Outro',
-    classePadrao: null,
-    observacao: 'Classe depende do fluido — selecione manualmente conforme o Anexo II.',
-  },
+  { nome: 'Outro',          classePadrao: 'D' },
 ];
 
-/** Atalho — mapa direto nome → classe padrão (null = exige escolha manual). */
-export const CLASSE_PADRAO_POR_FLUIDO: Record<string, ClasseFluido | null> =
+/** Atalho — mapa direto nome → classe padrão. */
+export const CLASSE_PADRAO_POR_FLUIDO: Record<string, ClasseFluido> =
   FLUIDOS_NR13.reduce((acc, f) => {
     acc[f.nome] = f.classePadrao;
     return acc;
-  }, {} as Record<string, ClasseFluido | null>);
+  }, {} as Record<string, ClasseFluido>);
+
+export function classePadraoPorFluido(
+  fluido: string,
+  temperaturaC?: number,
+): ClasseFluido {
+  if (fluido === 'Óleo') return (temperaturaC ?? 0) >= 200 ? 'A' : 'B';
+  return CLASSE_PADRAO_POR_FLUIDO[fluido] ?? 'D';
+}
 
 /* ----------------------------------------------------------------------------
  * 3. CATEGORIZAÇÃO DE VASOS DE PRESSÃO (NR-13, Anexo II)

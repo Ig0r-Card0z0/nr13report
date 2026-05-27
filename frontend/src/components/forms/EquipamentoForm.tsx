@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { clientesApi, equipamentosApi } from '@/lib/api';
 import { calcCategoria } from '@/lib/utils';
-import { FLUIDOS_NR13, CLASSE_PADRAO_POR_FLUIDO } from '@/lib/nr13';
+import { FLUIDOS_NR13, classePadraoPorFluido } from '@/lib/nr13';
 import { Cliente } from '@/types';
 import toast from 'react-hot-toast';
 
@@ -54,17 +54,17 @@ export default function EquipamentoForm({ equipamentoId }: Props) {
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(f => ({ ...f, [k]: e.target.value }));
 
-  // Ao escolher o fluido, aplica automaticamente a classe NR-13 padrão
-  // (Anexo II). Para fluidos com classe ambígua (ex.: "Outro") mantém a
-  // classe atual e deixa o usuário decidir manualmente.
+  useEffect(() => {
+    const temperatura = parseFloat(form.temperaturaProj);
+    const classe = classePadraoPorFluido(form.fluido, Number.isFinite(temperatura) ? temperatura : undefined);
+    if (classe !== form.classeFluido) setForm(f => ({ ...f, classeFluido: classe }));
+  }, [form.fluido, form.temperaturaProj]);
+
   const onFluidoChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const fluido = e.target.value;
-    const classePadrao = CLASSE_PADRAO_POR_FLUIDO[fluido];
-    setForm(f => ({
-      ...f,
-      fluido,
-      ...(classePadrao ? { classeFluido: classePadrao } : {}),
-    }));
+    const temperatura = parseFloat(form.temperaturaProj);
+    const classe = classePadraoPorFluido(fluido, Number.isFinite(temperatura) ? temperatura : undefined);
+    setForm(f => ({ ...f, fluido, classeFluido: classe }));
   };
 
   const submit = async () => {
@@ -82,7 +82,7 @@ export default function EquipamentoForm({ equipamentoId }: Props) {
       if (equipamentoId) await equipamentosApi.atualizar(equipamentoId, payload);
       else await equipamentosApi.criar(payload);
       toast.success('Equipamento salvo!');
-      router.push(form.clienteId ? `/clientes/${form.clienteId}` : '/equipamentos');
+      router.push('/equipamentos');
     } catch (err: any) {
       const msg = err?.response?.data?.message || err?.message || 'Erro ao salvar.';
       toast.error(String(msg));
@@ -161,11 +161,11 @@ export default function EquipamentoForm({ equipamentoId }: Props) {
         </div>
         <div>
           <label className="label">Classe do fluido</label>
-          <select className="input" value={form.classeFluido} onChange={set('classeFluido')}>
-            <option value="A">Classe A – Inflamável / Combustível ≥ 200 °C / Tóxico ≤ 20 ppm / H₂ / acetileno</option>
-            <option value="B">Classe B – Combustível &lt; 200 °C / Tóxico &gt; 20 ppm</option>
-            <option value="C">Classe C – Vapor d'água / Ar comprimido / Asfixiante simples</option>
-            <option value="D">Classe D – Outros fluidos (água / líquidos &lt; 200 °C)</option>
+          <select className="input" value={form.classeFluido} disabled>
+            <option value="A">Classe A – Inflamáveis / Combustíveis ≥ 200 °C / Tóxicos ≤ 20 ppm / Hidrogênio / Acetileno</option>
+            <option value="B">Classe B – Combustíveis &lt; 200 °C / Tóxicos &gt; 20 ppm</option>
+            <option value="C">Classe C – Vapor de água / Gases asfixiantes simples / Ar comprimido</option>
+            <option value="D">Classe D – Outros fluidos não enquadrados nas classes anteriores</option>
           </select>
         </div>
         <div>

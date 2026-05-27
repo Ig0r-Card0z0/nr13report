@@ -45,7 +45,7 @@ export default function DetalheEquipamentoPage({ params }: { params: { id: strin
   const excluirEq = async () => {
     await equipamentosApi.excluir(eqId);
     toast.success('Equipamento excluído.');
-    router.push(eq?.cliente_id ? `/clientes/${eq.cliente_id}` : '/equipamentos');
+    router.push('/equipamentos');
   };
 
   if (!eq) return <PageLoading />;
@@ -61,7 +61,7 @@ export default function DetalheEquipamentoPage({ params }: { params: { id: strin
           { label: eq.cliente_nome || 'Cliente', href: eq.cliente_id ? '/clientes/' + eq.cliente_id : undefined },
           { label: eq.tag },
         ]}
-        back={eq.cliente_id ? '/clientes/' + eq.cliente_id : '/equipamentos'}
+        back="/equipamentos"
         actions={
           <>
             <Link href={'/equipamentos/' + eqId + '/editar'} className="btn btn-sm">

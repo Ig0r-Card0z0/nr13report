@@ -3,6 +3,11 @@ import { DatabaseService } from '../../database/database.service';
 import { v4 as uuidv4 } from 'uuid';
 import { calcularPrazosNR13 } from '../../common/nr13';
 
+/** Detecta se o tipo de equipamento se refere a uma caldeira (NR-13 13.4). */
+function tipoEhCaldeira(tipo: string | null | undefined): boolean {
+  return /caldeira/i.test(String(tipo || ''));
+}
+
 export interface CreateEquipamentoDto {
   clienteId: string;
   tag: string;
@@ -29,6 +34,8 @@ export interface CreateEquipamentoDto {
   proxExterno?: string;
   proxInterno?: string;
   proxHidro?: string;
+  /** Caldeira de recuperação de álcalis — REQ-01.2 (prazo 15 meses). */
+  recuperacaoAlcalis?: boolean;
 }
 
 @Injectable()
@@ -38,7 +45,7 @@ export class EquipamentosService {
   findAll(clienteId?: string) {
     if (clienteId) {
       return this.db.instance.prepare(`
-        SELECT e.*, c.nome as cliente_nome,
+        SELECT e.*, c.nome as cliente_nome, c.possui_spie as cliente_possui_spie,
           (SELECT COUNT(*) FROM inspecoes WHERE equipamento_id = e.id) as total_inspecoes,
           (SELECT COUNT(*) FROM fotos WHERE equipamento_id = e.id) as total_fotos
         FROM equipamentos e
@@ -48,7 +55,7 @@ export class EquipamentosService {
       `).all(clienteId);
     }
     return this.db.instance.prepare(`
-      SELECT e.*, c.nome as cliente_nome,
+      SELECT e.*, c.nome as cliente_nome, c.possui_spie as cliente_possui_spie,
         (SELECT COUNT(*) FROM inspecoes WHERE equipamento_id = e.id) as total_inspecoes,
         (SELECT COUNT(*) FROM fotos WHERE equipamento_id = e.id) as total_fotos
       FROM equipamentos e
@@ -60,7 +67,8 @@ export class EquipamentosService {
   findOne(id: string) {
     const eq = this.db.instance.prepare(`
       SELECT e.*, c.nome as cliente_nome, c.cnpj as cliente_cnpj,
-        c.logradouro, c.numero, c.bairro, c.cidade, c.uf
+        c.logradouro, c.numero, c.bairro, c.cidade, c.uf,
+        c.possui_spie as cliente_possui_spie
       FROM equipamentos e
       LEFT JOIN clientes c ON c.id = e.cliente_id
       WHERE e.id = ?
@@ -71,18 +79,26 @@ export class EquipamentosService {
 
   create(dto: CreateEquipamentoDto) {
     const id = uuidv4();
+    const cli = this.db.instance.prepare(
+      `SELECT possui_spie FROM clientes WHERE id = ?`,
+    ).get(dto.clienteId) as any;
     const prazos = this.completarPrazos(dto.categoria, dto.dtUltimaInsp, {
       prox_externo: dto.proxExterno,
       prox_interno: dto.proxInterno,
       prox_hidro:   dto.proxHidro,
+    }, {
+      comSpie: !!cli?.possui_spie,
+      tipoEquipamento: tipoEhCaldeira(dto.tipo) ? 'caldeira' : 'vaso',
+      opcoesCaldeira: { recuperacaoAlcalis: !!dto.recuperacaoAlcalis },
     });
     this.db.instance.prepare(`
       INSERT INTO equipamentos (
         id, cliente_id, tag, tipo, fabricante, serie, ano, posicao, codigo_projeto,
         local_instalacao, fluido, classe_fluido, temperatura_projeto, volume,
         pressao_operacao, pmta, pressao_hidro, metal_base, categoria, grupo_risco,
-        dt_ultima_insp, tipo_ultima_insp, art_ultima_insp, prox_externo, prox_interno, prox_hidro
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        dt_ultima_insp, tipo_ultima_insp, art_ultima_insp, prox_externo, prox_interno, prox_hidro,
+        recuperacao_alcalis
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       id, dto.clienteId, dto.tag, dto.tipo || 'Vaso de Pressão',
       dto.fabricante, dto.serie, dto.ano, dto.posicao || 'Vertical',
@@ -90,7 +106,8 @@ export class EquipamentosService {
       dto.temperaturaProj, dto.volume, dto.pressaoOperacao, dto.pmta,
       dto.pressaoHidro, dto.metalBase, dto.categoria, dto.grupoRisco,
       dto.dtUltimaInsp, dto.tipoUltimaInsp, dto.artUltimaInsp,
-      prazos.prox_externo, prazos.prox_interno, prazos.prox_hidro
+      prazos.prox_externo, prazos.prox_interno, prazos.prox_hidro,
+      dto.recuperacaoAlcalis ? 1 : 0,
     );
     return this.findOne(id);
   }
@@ -104,8 +121,9 @@ export class EquipamentosService {
     categoria: string | undefined,
     dtUltimaInsp: string | undefined,
     explicit: { prox_externo?: string; prox_interno?: string; prox_hidro?: string },
+    opts: import('../../common/nr13').OpcoesCalculoPrazo = {},
   ) {
-    const calc = calcularPrazosNR13(categoria, dtUltimaInsp);
+    const calc = calcularPrazosNR13(categoria, dtUltimaInsp, opts);
     return {
       prox_externo: explicit.prox_externo !== undefined ? explicit.prox_externo : calc.prox_externo,
       prox_interno: explicit.prox_interno !== undefined ? explicit.prox_interno : calc.prox_interno,
@@ -124,6 +142,7 @@ export class EquipamentosService {
       categoria: 'categoria', grupoRisco: 'grupo_risco', dtUltimaInsp: 'dt_ultima_insp',
       tipoUltimaInsp: 'tipo_ultima_insp', artUltimaInsp: 'art_ultima_insp',
       proxExterno: 'prox_externo', proxInterno: 'prox_interno', proxHidro: 'prox_hidro',
+      recuperacaoAlcalis: 'recuperacao_alcalis',
     };
 
     // Auto-completa prazos NR-13 quando o front não envia explicitamente
@@ -138,7 +157,17 @@ export class EquipamentosService {
     if ((tocouCategoria || tocouDtInsp) && !enviouAlgumPrazo) {
       const cat = tocouCategoria ? dto.categoria : atual.categoria;
       const dtIns = tocouDtInsp ? dto.dtUltimaInsp : atual.dt_ultima_insp;
-      const calc = calcularPrazosNR13(cat, dtIns);
+      const tipo = dto.tipo !== undefined ? dto.tipo : atual.tipo;
+      const recAlc = dto.recuperacaoAlcalis !== undefined
+        ? dto.recuperacaoAlcalis : !!atual.recuperacao_alcalis;
+      const cli = this.db.instance.prepare(
+        `SELECT possui_spie FROM clientes WHERE id = ?`,
+      ).get(atual.cliente_id) as any;
+      const calc = calcularPrazosNR13(cat, dtIns, {
+        comSpie: !!cli?.possui_spie,
+        tipoEquipamento: tipoEhCaldeira(tipo) ? 'caldeira' : 'vaso',
+        opcoesCaldeira: { recuperacaoAlcalis: !!recAlc },
+      });
       if (calc.prox_externo) dto = { ...dto, proxExterno: calc.prox_externo };
       if (calc.prox_interno) dto = { ...dto, proxInterno: calc.prox_interno };
       if (calc.prox_hidro)   dto = { ...dto, proxHidro:   calc.prox_hidro };
@@ -147,7 +176,10 @@ export class EquipamentosService {
     const sets: string[] = [];
     const vals: any[] = [];
     Object.entries(dto).forEach(([k, v]) => {
-      if (map[k] && v !== undefined) { sets.push(`${map[k]} = ?`); vals.push(v); }
+      if (!map[k] || v === undefined) return;
+      sets.push(`${map[k]} = ?`);
+      if (k === 'recuperacaoAlcalis') vals.push(v ? 1 : 0);
+      else vals.push(v);
     });
     if (!sets.length) return this.findOne(id);
     this.db.instance.prepare(

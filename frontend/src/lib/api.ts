@@ -139,16 +139,23 @@ export const meApi = {
 };
 
 // ── Relatórios ────────────────────────────────────────
+// Serializa overrides em query param (?overrides=JSON-encoded). Vazio = omitido.
+const qsOverrides = (ov?: Record<string, string> | null): string => {
+  if (!ov || Object.keys(ov).length === 0) return '';
+  return `&overrides=${encodeURIComponent(JSON.stringify(ov))}`;
+};
+
 export const relatoriosApi = {
   urlPDF: (equipamentoId: string)   => `/api/relatorios/pdf/${equipamentoId}`,
   urlPDFDownload: (equipamentoId: string) => `/api/relatorios/pdf/${equipamentoId}?download=1`,
-  urlPDFInspecao: (equipamentoId: string, inspecaoId: string) => `/api/relatorios/pdf/${equipamentoId}?inspecaoId=${encodeURIComponent(inspecaoId)}`,
-  urlPDFInspecaoDownload: (equipamentoId: string, inspecaoId: string) =>
-    `/api/relatorios/pdf/${equipamentoId}?download=1&inspecaoId=${encodeURIComponent(inspecaoId)}`,
+  urlPDFInspecao: (equipamentoId: string, inspecaoId: string, ov?: Record<string, string> | null) =>
+    `/api/relatorios/pdf/${equipamentoId}?inspecaoId=${encodeURIComponent(inspecaoId)}${qsOverrides(ov)}`,
+  urlPDFInspecaoDownload: (equipamentoId: string, inspecaoId: string, ov?: Record<string, string> | null) =>
+    `/api/relatorios/pdf/${equipamentoId}?download=1&inspecaoId=${encodeURIComponent(inspecaoId)}${qsOverrides(ov)}`,
   // Relatório em formato Word (.docx)
   urlDOCXDownload: (equipamentoId: string) => `/api/relatorios/docx/${equipamentoId}?download=1`,
-  urlDOCXInspecaoDownload: (equipamentoId: string, inspecaoId: string) =>
-    `/api/relatorios/docx/${equipamentoId}?download=1&inspecaoId=${encodeURIComponent(inspecaoId)}`,
+  urlDOCXInspecaoDownload: (equipamentoId: string, inspecaoId: string, ov?: Record<string, string> | null) =>
+    `/api/relatorios/docx/${equipamentoId}?download=1&inspecaoId=${encodeURIComponent(inspecaoId)}${qsOverrides(ov)}`,
 };
 
 // ── Health ────────────────────────────────────────────

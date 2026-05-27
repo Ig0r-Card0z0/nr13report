@@ -19,6 +19,8 @@ export interface CreateClienteDto {
   responsavel?: string;
   cargo?: string;
   profissionalId?: string | null;
+  /** Indica se o estabelecimento possui SPIE (Anexo II da NR-13). */
+  possuiSpie?: boolean;
 }
 
 @Injectable()
@@ -55,9 +57,9 @@ export class ClientesService {
   create(dto: CreateClienteDto) {
     const id = uuidv4();
     this.db.instance.prepare(`
-      INSERT INTO clientes (id, nome, fantasia, cnpj, tel, email, cep, logradouro, numero, bairro, cidade, uf, responsavel, cargo, profissional_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, dto.nome, dto.fantasia, dto.cnpj, dto.tel, dto.email, dto.cep, dto.logradouro, dto.numero, dto.bairro, dto.cidade, dto.uf, dto.responsavel, dto.cargo, dto.profissionalId || null);
+      INSERT INTO clientes (id, nome, fantasia, cnpj, tel, email, cep, logradouro, numero, bairro, cidade, uf, responsavel, cargo, profissional_id, possui_spie)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, dto.nome, dto.fantasia, dto.cnpj, dto.tel, dto.email, dto.cep, dto.logradouro, dto.numero, dto.bairro, dto.cidade, dto.uf, dto.responsavel, dto.cargo, dto.profissionalId || null, dto.possuiSpie ? 1 : 0);
     return this.findOne(id);
   }
 
@@ -78,6 +80,7 @@ export class ClientesService {
       responsavel: 'responsavel',
       cargo: 'cargo',
       profissionalId: 'profissional_id',
+      possuiSpie: 'possui_spie',
     };
 
     const sets: string[] = [];
@@ -86,7 +89,8 @@ export class ClientesService {
       const col = map[k];
       if (!col || v === undefined) return;
       sets.push(`${col} = ?`);
-      vals.push(typeof v === 'string' ? (v.trim() || null) : v);
+      if (k === 'possuiSpie') vals.push(v ? 1 : 0);
+      else vals.push(typeof v === 'string' ? (v.trim() || null) : v);
     });
 
     if (!sets.length) return this.findOne(id);
