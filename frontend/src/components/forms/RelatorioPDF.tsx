@@ -3,7 +3,9 @@ import { useMemo, useState } from 'react';
 import { Equipamento, Inspecao, Foto, MedicaoEspessura } from '@/types';
 import { relatoriosApi } from '@/lib/api';
 import { fmtData } from '@/lib/utils';
-import { Download, FileText, CheckCircle, Eye, X, FileType } from 'lucide-react';
+import { Download, FileText, CheckCircle, Eye, X, FileType, SlidersHorizontal } from 'lucide-react';
+import { EditorResultadoInspecao, Overrides } from './EditorResultadoInspecao';
+import { Tabs } from '@/components/ui/Tabs';
 
 interface Props {
   equipamento: Equipamento;
@@ -16,9 +18,22 @@ interface Props {
 export function RelatorioPDF({ equipamento: eq, inspecoes, fotos, medicao, inspecaoId }: Props) {
   const inspecao = inspecaoId ? inspecoes.find(i => i.id === inspecaoId) : inspecoes[0];
   const [previewOpen, setPreviewOpen] = useState(false);
-  const pdfUrl = inspecaoId ? relatoriosApi.urlPDFInspecao(eq.id, inspecaoId) : relatoriosApi.urlPDF(eq.id);
-  const pdfUrlDownload = inspecaoId ? relatoriosApi.urlPDFInspecaoDownload(eq.id, inspecaoId) : relatoriosApi.urlPDFDownload(eq.id);
-  const docxUrlDownload = inspecaoId ? relatoriosApi.urlDOCXInspecaoDownload(eq.id, inspecaoId) : relatoriosApi.urlDOCXDownload(eq.id);
+  const [aba, setAba] = useState<'gerar' | 'resultado'>('gerar');
+  // Overrides da seção 4/5.1 — vazio = relatório usa todos os valores padrão.
+  const [overrides, setOverrides] = useState<Overrides>({});
+  const qtdOverrides = Object.keys(overrides).length;
+
+  // As URLs só carregam overrides quando há uma inspeção selecionada;
+  // sem inspecaoId o backend não roda a seção 4 com dados específicos.
+  const pdfUrl = inspecaoId
+    ? relatoriosApi.urlPDFInspecao(eq.id, inspecaoId, overrides)
+    : relatoriosApi.urlPDF(eq.id);
+  const pdfUrlDownload = inspecaoId
+    ? relatoriosApi.urlPDFInspecaoDownload(eq.id, inspecaoId, overrides)
+    : relatoriosApi.urlPDFDownload(eq.id);
+  const docxUrlDownload = inspecaoId
+    ? relatoriosApi.urlDOCXInspecaoDownload(eq.id, inspecaoId, overrides)
+    : relatoriosApi.urlDOCXDownload(eq.id);
 
   const itens = useMemo(() => ([
     { label: 'Identificação do equipamento', ok: !!eq.tag },
@@ -39,6 +54,33 @@ export function RelatorioPDF({ equipamento: eq, inspecoes, fotos, medicao, inspe
 
   return (
     <div>
+      {/* Abas superiores: Gerar Relatório / Resultado da Inspeção */}
+      <Tabs
+        ariaLabel="Seções do gerador de relatório"
+        idPrefix="relpdf"
+        tabs={[
+          { id: 'gerar', label: 'Gerar Relatório', icon: FileText },
+          { id: 'resultado', label: 'Resultado da Inspeção', icon: SlidersHorizontal, badge: qtdOverrides },
+        ]}
+        active={aba}
+        onChange={id => setAba(id as 'gerar' | 'resultado')}
+      />
+
+      {/* Painel: Resultado da Inspeção (montado sempre p/ preservar estado) */}
+      <div hidden={aba !== 'resultado'}>
+        {inspecaoId ? (
+          <EditorResultadoInspecao onChange={setOverrides} />
+        ) : (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-700 mb-5">
+            Selecione uma inspeção específica para ajustar os itens do Resultado
+            da Inspeção. Sem inspeção selecionada, o relatório usa apenas os
+            valores padrão.
+          </div>
+        )}
+      </div>
+
+      {/* Painel: Gerar Relatório (conteúdo original) */}
+      <div hidden={aba !== 'gerar'}>
       {/* Checklist de completude */}
       <div className="bg-white border border-gray-200 rounded-xl p-5 mb-5">
         <div className="flex items-center justify-between mb-4">
@@ -71,6 +113,22 @@ export function RelatorioPDF({ equipamento: eq, inspecoes, fotos, medicao, inspe
           </div>
         ))}
       </div>
+
+      {qtdOverrides > 0 && (
+        <div className="mb-3 flex items-center gap-2 text-xs bg-primary-50 border border-primary-200 rounded-lg px-3 py-2 text-primary-800">
+          <SlidersHorizontal size={13} className="text-primary-700" />
+          <span>
+            <strong>{qtdOverrides}</strong> {qtdOverrides === 1 ? 'item ajustado' : 'itens ajustados'} na aba <strong>Resultado da Inspeção</strong> serão aplicados ao relatório.
+          </span>
+          <button
+            type="button"
+            onClick={() => setAba('resultado')}
+            className="ml-auto text-primary-700 hover:underline font-medium"
+          >
+            Revisar
+          </button>
+        </div>
+      )}
 
       {/* Botão principal */}
       <div className="bg-white border border-gray-200 rounded-xl p-8 text-center">
@@ -141,6 +199,8 @@ export function RelatorioPDF({ equipamento: eq, inspecoes, fotos, medicao, inspe
           ].map(s => <div key={s} className="flex items-center gap-2"><CheckCircle size={13} className="text-green-400 flex-shrink-0" />{s}</div>)}
         </div>
       </div>
+      </div>
+      {/* Fim painel "Gerar Relatório" */}
 
       {previewOpen && (
         <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">

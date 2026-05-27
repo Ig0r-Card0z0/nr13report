@@ -220,6 +220,11 @@ export class DatabaseService implements OnModuleInit {
     this.addColumnIfMissing('clientes', 'logo_filename', 'TEXT');
     this.addColumnIfMissing('medicoes_espessura', 'instrumento_id', 'TEXT REFERENCES instrumentos_medicao(id) ON DELETE SET NULL');
 
+    // NR-13: SPIE (estabelecimento), recuperação álcalis (caldeira), teste válvula 12m (inspeção).
+    this.addColumnIfMissing('clientes', 'possui_spie', 'INTEGER NOT NULL DEFAULT 0');
+    this.addColumnIfMissing('equipamentos', 'recuperacao_alcalis', 'INTEGER NOT NULL DEFAULT 0');
+    this.addColumnIfMissing('inspecoes', 'teste_valvula_12m', 'INTEGER NOT NULL DEFAULT 0');
+
     // Bootstrap inicial: para cada combinação distinta de (ph_nome, ph_crea)
     // já existente em inspecoes, criar um Profissional correspondente.
     // Idempotente — só insere se ainda não houver match por nome+crea.

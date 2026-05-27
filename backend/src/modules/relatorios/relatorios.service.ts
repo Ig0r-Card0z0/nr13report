@@ -7,6 +7,16 @@ import * as fs from 'fs';
 import { PDFDocument as PDFLibDocument } from 'pdf-lib';
 import sharp from 'sharp';
 import { gerarDOCXBuffer } from './relatorios-docx';
+import {
+  ResultadoOverrides,
+  parseOverrides,
+  resolverSim,
+  resolverTipoInspecao,
+  resolverDataRecPH,
+  resolverObs,
+  obsConclusaoTipo,
+  TipoInspecaoMarcado,
+} from './resultado-overrides';
 
 type FotoPrep = {
   buffer: Buffer | null;
@@ -62,12 +72,29 @@ function fn(v: any, dec = 2): string {
   return isNaN(n) ? '—' : n.toFixed(dec);
 }
 
+// PDFKit usa Helvetica (WinAnsi) que não cobre subscritos/sobrescritos Unicode.
+// Normaliza glifos comuns (NH₃, CO₂, H₂, etc.) para ASCII antes de imprimir.
+const SUB_MAP: Record<string, string> = {
+  '₀':'0','₁':'1','₂':'2','₃':'3','₄':'4','₅':'5','₆':'6','₇':'7','₈':'8','₉':'9',
+  '⁰':'0','¹':'1','²':'2','³':'3','⁴':'4','⁵':'5','⁶':'6','⁷':'7','⁸':'8','⁹':'9',
+};
+function pdfSafe(s?: string | null): string {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/[₀-₉⁰-⁹]/g, c => SUB_MAP[c] ?? c);
+}
+
 // ─── Service ──────────────────────────────────────────────────────────────────
 @Injectable()
 export class RelatoriosService {
   constructor(private readonly db: DatabaseService) {}
 
-  async gerarPDF(equipamentoId: string, inspecaoId?: string): Promise<Buffer> {
+  async gerarPDF(
+    equipamentoId: string,
+    inspecaoId?: string,
+    overrides?: ResultadoOverrides,
+  ): Promise<Buffer> {
+    // Overrides manuais da seção 4 (vazio = usar defaults derivados).
+    const ov: ResultadoOverrides = overrides || {};
     // ── 1. Carregar dados do banco (better-sqlite3 é síncrono) ───────────────
     const db = this.db.instance;
 
@@ -586,7 +613,7 @@ export class RelatoriosService {
       });
 
       const sub2Y = sub1Y + 20;
-      [`Fluido de Trabalho: ${eq.fluido || '—'}`, `Tipo: ${eq.posicao || '—'}`].forEach((t, i) => {
+      [`Fluido de Trabalho: ${pdfSafe(eq.fluido) || '—'}`, `Tipo: ${eq.posicao || '—'}`].forEach((t, i) => {
         doc.save().strokeColor(C.azulM).lineWidth(0.4)
            .rect(ML + i * (TW / 2), sub2Y, TW / 2, 20).stroke().restore();
         doc.fillColor(C.preto).font('Helvetica').fontSize(10)
@@ -737,11 +764,13 @@ export class RelatoriosService {
 
       subSecao('4.1 EXAME DOS PRONTUÁRIOS');
       chkHdr();
-      // Usar dados da inspeção se disponível, caso contrário usar defaults
+      // Defaults derivados da inspeção; podem ser sobrescritos via `ov`.
       const inspecaoNoInicio = insp?.tipo === 'Externa' || insp?.tipo === 'Interna';
       const recomendacoesPraticadas = insp?.observacoes?.includes('recomendação') || false;
-      chkItem(1, 'A presente inspeção foi iniciada dentro do prazo para isso fixado na NR-13?', inspecaoNoInicio, '');
-      chkItem(2, 'As recomendações anteriores foram devidamente postas em prática?', recomendacoesPraticadas, '');
+      chkItem(1, 'A presente inspeção foi iniciada dentro do prazo para isso fixado na NR-13?',
+        resolverSim(ov, 'prontuarios.1', inspecaoNoInicio), resolverObs(ov, 'prontuarios.1', ''));
+      chkItem(2, 'As recomendações anteriores foram devidamente postas em prática?',
+        resolverSim(ov, 'prontuarios.2', recomendacoesPraticadas), resolverObs(ov, 'prontuarios.2', ''));
       sp(3);
 
       subSecao('EXAME EXTERNO DO EQUIPAMENTO');
@@ -751,12 +780,18 @@ export class RelatoriosService {
       const equipSatisfazSeguranca = insp?.resultado === 'Apto' || insp?.resultado === 'Apto com restrições';
       const caracDisponivelConfere = true; // Assumir que sim por padrão
       const anomaliaObservada = insp?.resultado === 'Inapto' || insp?.observacoes?.includes('anomalia');
-      chkItem(1, 'O vaso de pressão funciona normalmente?', vasoFunciona, '');
-      chkItem(2, 'O vaso de pressão satisfaz a todas as condições de segurança desta Norma NR-13 observáveis neste exame?', equipSatisfazSeguranca, '');
-      chkItem(3, 'A parte de caracterização do equipamento (placa de identificação) acessível ao exame confere com o que, sobre elas constam dos prontuários?', caracDisponivelConfere, '');
-      chkItem(4, 'Foi observada alguma anomalia capaz de prejudicar a segurança?', anomaliaObservada, '');
-      chkItem(5, 'Além do exame normal, foi realizado o exame externo complementar com este parado?', false, '');
-      chkItem(6, 'Foram calibrados os manômetros e válvulas de segurança?', true, 'Todos os certificados dos instrumentos estão em anexo.');
+      chkItem(1, 'O vaso de pressão funciona normalmente?',
+        resolverSim(ov, 'externo.1', vasoFunciona), resolverObs(ov, 'externo.1', ''));
+      chkItem(2, 'O vaso de pressão satisfaz a todas as condições de segurança desta Norma NR-13 observáveis neste exame?',
+        resolverSim(ov, 'externo.2', equipSatisfazSeguranca), resolverObs(ov, 'externo.2', ''));
+      chkItem(3, 'A parte de caracterização do equipamento (placa de identificação) acessível ao exame confere com o que, sobre elas constam dos prontuários?',
+        resolverSim(ov, 'externo.3', caracDisponivelConfere), resolverObs(ov, 'externo.3', ''));
+      chkItem(4, 'Foi observada alguma anomalia capaz de prejudicar a segurança?',
+        resolverSim(ov, 'externo.4', anomaliaObservada), resolverObs(ov, 'externo.4', ''));
+      chkItem(5, 'Além do exame normal, foi realizado o exame externo complementar com este parado?',
+        resolverSim(ov, 'externo.5', false), resolverObs(ov, 'externo.5', ''));
+      chkItem(6, 'Foram calibrados os manômetros e válvulas de segurança?',
+        resolverSim(ov, 'externo.6', true), resolverObs(ov, 'externo.6', 'Todos os certificados dos instrumentos estão em anexo.'));
       sp(3);
 
       // ══════════════════════════════════════════════════════════════════════
@@ -766,16 +801,21 @@ export class RelatoriosService {
       subSecao('4.3 EXAME INTERNO');
       chkHdr();
       const anomaliaInterna = insp?.observacoes?.includes('anomalia interna') || false;
-      chkItem(1, 'O vaso de pressão antes de ser limpo, apresentava alguma anomalia?', anomaliaInterna, '');
-      chkItem(2, 'Internamente, o vaso de pressão depois de limpo, está em ordem e satisfaz todas as condições de segurança constante da NBR 12177 da ABNT?', !anomaliaInterna, '');
-      chkItem(3, 'A parte da caracterização do vaso acessível a esse exame confere com o que sobre a mesma consta no prontuário?', true, '');
-      chkItem(4, 'Foi observada alguma anomalia capaz de prejudicar a segurança?', anomaliaInterna, '');
+      chkItem(1, 'O vaso de pressão antes de ser limpo, apresentava alguma anomalia?',
+        resolverSim(ov, 'interno.1', anomaliaInterna), resolverObs(ov, 'interno.1', ''));
+      chkItem(2, 'Internamente, o vaso de pressão depois de limpo, está em ordem e satisfaz todas as condições de segurança constante da NBR 12177 da ABNT?',
+        resolverSim(ov, 'interno.2', !anomaliaInterna), resolverObs(ov, 'interno.2', ''));
+      chkItem(3, 'A parte da caracterização do vaso acessível a esse exame confere com o que sobre a mesma consta no prontuário?',
+        resolverSim(ov, 'interno.3', true), resolverObs(ov, 'interno.3', ''));
+      chkItem(4, 'Foi observada alguma anomalia capaz de prejudicar a segurança?',
+        resolverSim(ov, 'interno.4', anomaliaInterna), resolverObs(ov, 'interno.4', ''));
       sp(3);
 
       secao('ATUALIZAÇÃO DA PMTA');
       chkHdr();
-      chkItem(1, `A atual PMTA de ${fn(pmta)} bar pode ser mantida?`, true,
-        'PMTA definida conforme memória de cálculo contida no prontuário do vaso de pressão.');
+      chkItem(1, `A atual PMTA de ${fn(pmta)} bar pode ser mantida?`,
+        resolverSim(ov, 'pmta.1', true),
+        resolverObs(ov, 'pmta.1', 'PMTA definida conforme memória de cálculo contida no prontuário do vaso de pressão.'));
       sp(3);
 
       checar(120);
@@ -783,25 +823,33 @@ export class RelatoriosService {
       chkHdr();
       const precisoTesteHidro = insp?.tipo === 'Interna' || false;
       const anomaliaTesteHidro = false;
-      chkItem(1, 'Foi realizado ensaio hidrostático?', precisoTesteHidro,
-        `O próximo teste hidrostático será realizado em ${fdt(eq.prox_hidro)}.`);
-      chkItem(2, 'Foi observada alguma anomalia capaz de prejudicar a segurança?', anomaliaTesteHidro, '');
+      chkItem(1, 'Foi realizado ensaio hidrostático?',
+        resolverSim(ov, 'hidro.1', precisoTesteHidro),
+        resolverObs(ov, 'hidro.1', `O próximo teste hidrostático será realizado em ${fdt(eq.prox_hidro)}.`));
+      chkItem(2, 'Foi observada alguma anomalia capaz de prejudicar a segurança?',
+        resolverSim(ov, 'hidro.2', anomaliaTesteHidro), resolverObs(ov, 'hidro.2', ''));
       sp(3);
 
       secao('OUTROS ENSAIOS');
       chkHdr();
       const realizouME = me ? true : false;
-      chkItem(1, 'Foi realizado algum ensaio adicional?', realizouME,
-        realizouME ? 'Realizado ensaio de ME para verificar se houve perda de massa estrutural do vaso.' : '');
+      chkItem(1, 'Foi realizado algum ensaio adicional?',
+        resolverSim(ov, 'outros.1', realizouME),
+        resolverObs(ov, 'outros.1', realizouME ? 'Realizado ensaio de ME para verificar se houve perda de massa estrutural do vaso.' : ''));
       sp(3);
 
       secao('CONCLUSÃO');
       chkHdr();
       const apto = (insp?.resultado || 'Apto') === 'Apto';
       const apoComRestricoes = (insp?.resultado || 'Apto') === 'Apto com restrições';
-      chkItem(1, 'O Vaso de Pressão inspecionado pode ser utilizado normalmente?', apto || apoComRestricoes, insp?.observacoes || '');
-      chkItem(2, 'O Vaso de Pressão deverá ser submetido a nova inspeção de segurança, de acordo com a NR-13 do M.T.E.', true, 
-        `(${insp?.tipo === 'Interna' ? 'x' : ' '}) Periódica ${insp?.tipo === 'Interna' ? '' : ''}`);
+      const tipoInspPdf: TipoInspecaoMarcado = resolverTipoInspecao(
+        ov, insp?.tipo === 'Interna' ? 'periodica' : 'periodica');
+      chkItem(1, 'O Vaso de Pressão inspecionado pode ser utilizado normalmente?',
+        resolverSim(ov, 'conclusao.1', apto || apoComRestricoes),
+        resolverObs(ov, 'conclusao.1', insp?.observacoes || ''));
+      chkItem(2, 'O Vaso de Pressão deverá ser submetido a nova inspeção de segurança, de acordo com a NR-13 do M.T.E.',
+        resolverSim(ov, 'conclusao.2-sim', true),
+        resolverObs(ov, 'conclusao.2-sim', obsConclusaoTipo(tipoInspPdf)));
 
       // ══════════════════════════════════════════════════════════════════════
       // PÁG 7 – MEMORIAL DE CÁLCULO
@@ -830,7 +878,7 @@ export class RelatoriosService {
            .text(t, ML + i * cw3 + 4, cbs1Y + 5,
                  { width: cw3 - 8, align: 'center', lineBreak: false });
       });
-      [`Fluido de Trabalho: ${eq.fluido || '—'}`, `Tipo: ${eq.posicao || '—'}`].forEach((t, i) => {
+      [`Fluido de Trabalho: ${pdfSafe(eq.fluido) || '—'}`, `Tipo: ${eq.posicao || '—'}`].forEach((t, i) => {
         doc.save().strokeColor(C.azulM).lineWidth(0.4)
            .rect(ML + i * (TW / 2), cbs1Y + 20, TW / 2, 20).stroke().restore();
         doc.fillColor(C.preto).font('Helvetica').fontSize(10)
@@ -845,7 +893,7 @@ export class RelatoriosService {
         ['Volume em m³:',           fn(vol, 3)],
         ['P×V (MPa·m³):',           fn(pvMpa, 4)],
         ['Grupo Potencial de Risco:', grp],
-        ['Classe do Fluido:',       `Classe ${classe}: ${eq.fluido || ''}`],
+        ['Classe do Fluido:',       `Classe ${classe}: ${pdfSafe(eq.fluido) || ''}`],
         ['Categoria do Vaso:',      cat],
         ['Enquadramento:',          pvMpa > 0 ? 'Se enquadra' : 'Verificar'],
       ]);
@@ -874,10 +922,13 @@ export class RelatoriosService {
       });
       y += rh18;
 
+      const recExt = resolverDataRecPH(ov, 'prox.externo.recph');
+      const recInt = resolverDataRecPH(ov, 'prox.interno.recph');
+      const recHid = resolverDataRecPH(ov, 'prox.hidro.recph');
       const prxData = [
-        ['Exame Externo',    '5 anos',  '1 ano',   fdt(insp?.prox_externo || eq.prox_externo || '')],
-        ['Exame Interno',    '10 anos', '5 anos',  fdt(insp?.prox_interno || eq.prox_interno || '')],
-        ['Teste Hidrostático', '20 anos', '10 anos', fdt(eq.prox_hidro || '')],
+        ['Exame Externo',    '5 anos',  recExt ? fdt(recExt) : '1 ano',   fdt(insp?.prox_externo || eq.prox_externo || '')],
+        ['Exame Interno',    '10 anos', recInt ? fdt(recInt) : '5 anos',  fdt(insp?.prox_interno || eq.prox_interno || '')],
+        ['Teste Hidrostático', '20 anos', recHid ? fdt(recHid) : '10 anos', fdt(eq.prox_hidro || '')],
       ];
       prxData.forEach((row, ri) => {
         checar(rh18);
@@ -1381,7 +1432,11 @@ export class RelatoriosService {
    * o mesmo pré-processamento de imagens; a montagem do documento fica em
    * relatorios-docx.ts. Não mescla anexos PDF (limitação do formato Word).
    */
-  async gerarDOCX(equipamentoId: string, inspecaoId?: string): Promise<Buffer> {
+  async gerarDOCX(
+    equipamentoId: string,
+    inspecaoId?: string,
+    overrides?: ResultadoOverrides,
+  ): Promise<Buffer> {
     const db = this.db.instance;
 
     const eq = db.prepare(`
@@ -1539,6 +1594,7 @@ export class RelatoriosService {
     return gerarDOCXBuffer({
       eq, insp, me, pontos, instrumentos, fotosPrep, capaPrep, clienteLogoPrep,
       docsGerados, logoNortendBuffer,
+      overrides: overrides || {},
       derivados: { pmta, vol, pvMpa, cat, grp, classe, dtInsp, phNome, phCrea, art, numRel },
     });
   }
