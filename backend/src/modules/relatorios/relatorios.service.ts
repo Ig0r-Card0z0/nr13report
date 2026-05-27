@@ -353,8 +353,8 @@ export class RelatoriosService {
         // Texto do rodapé — linha única, title case, abaixo da linha laranja
         doc.fillColor(C.cinzaT).font('Helvetica').fontSize(7)
            .text(
-             'Nort.End - Engenharia e Inspeção  |  92 99387.6271  |  eng.nortend@gmail.com  |  ' +
-             'CNPJ: 36.724.646/0001-69  |  CREA-AM: 041725365-6',
+             'Nort.End - Engenharia e Inspeção | 92 99387.6271 | www.nortendengenharia.com.br | ' +
+             'eng.nortend@gmail.com | CNPJ: 36.724.646/0001-69',
              ML, FTRY - 9, { width: TW, align: 'center', lineBreak: false },
            );
 

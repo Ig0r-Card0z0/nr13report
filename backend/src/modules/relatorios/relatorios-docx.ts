@@ -763,8 +763,8 @@ export async function gerarDOCXBuffer(input: DocxInput): Promise<Buffer> {
       alignment: AlignmentType.CENTER,
       border: { top: { style: BorderStyle.SINGLE, size: 8, color: K.laranja, space: 2 } },
       children: [t(
-        'Nort.End - Engenharia e Inspeção  |  92 99387.6271  |  eng.nortend@gmail.com  |  ' +
-        'CNPJ: 36.724.646/0001-69  |  CREA-AM: 041725365-6',
+        'Nort.End - Engenharia e Inspeção | 92 99387.6271 | www.nortendengenharia.com.br | ' +
+        'eng.nortend@gmail.com | CNPJ: 36.724.646/0001-69',
         { size: 7, color: K.cinzaT })],
     })],
   });
