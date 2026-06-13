@@ -3,12 +3,7 @@ import { DatabaseService } from '../../database/database.service';
 import { v4 as uuidv4 } from 'uuid';
 import { existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import { calcularPrazosNR13 } from '../../common/nr13';
-
-/** Detecta se o tipo do equipamento se refere a uma caldeira (NR-13 13.4). */
-function tipoEhCaldeira(tipo: string | null | undefined): boolean {
-  return /caldeira/i.test(String(tipo || ''));
-}
+import { calcularPrazosEquipamento } from '../../common/nr13';
 
 export interface CreateInspecaoDto {
   equipamentoId: string;
@@ -24,8 +19,6 @@ export interface CreateInspecaoDto {
   proxHidro?: string;
   prazoComplementos?: string;
   observacoes?: string;
-  /** REQ-01.3.1: caldeira A com teste de pressão das válvulas aos 12 meses → prazo 24m. */
-  testeValvula12m?: boolean;
 }
 
 export interface UpdateInspecaoDto {
@@ -41,7 +34,6 @@ export interface UpdateInspecaoDto {
   proxHidro?: string;
   prazoComplementos?: string;
   observacoes?: string;
-  testeValvula12m?: boolean;
 }
 
 export interface DispositivoSegurancaDto {
@@ -103,23 +95,18 @@ export class InspecoesService {
     if (!dto.data) throw new BadRequestException('Data da inspeção é obrigatória.');
 
     const tx = this.db.instance.transaction(() => {
-      // Busca categoria + tipo + flags caldeira do equipamento e SPIE do cliente
-      // para auto-calcular prazos NR-13 quando o DTO não envia.
-      const eq = this.db.instance.prepare(`
-        SELECT e.categoria, e.tipo, e.recuperacao_alcalis, c.possui_spie
-        FROM equipamentos e
-        LEFT JOIN clientes c ON c.id = e.cliente_id
-        WHERE e.id = ?
-      `).get(dto.equipamentoId) as any;
+      // Busca categoria do equipamento para auto-calcular prazos NR-13 que não vierem no DTO
+      const eq = this.db.instance.prepare(
+        `SELECT categoria, tipo, com_spie, valvulas_testadas_12m
+         FROM equipamentos WHERE id = ?`,
+      ).get(dto.equipamentoId) as any;
       if (!eq) throw new NotFoundException('Equipamento não encontrado.');
 
-      const calc = calcularPrazosNR13(eq.categoria, dto.data, {
-        comSpie: !!eq.possui_spie,
-        tipoEquipamento: tipoEhCaldeira(eq.tipo) ? 'caldeira' : 'vaso',
-        opcoesCaldeira: {
-          recuperacaoAlcalis: !!eq.recuperacao_alcalis,
-          testeValvula12m: !!dto.testeValvula12m,
-        },
+      // Roteia o cálculo NR-13 pelo tipo do equipamento:
+      // Caldeira -> 13.4.4.4/13.4.4.5 (meses) | Vaso -> Anexo IV Tabela 1 (anos)
+      const calc = calcularPrazosEquipamento(eq.tipo, eq.categoria, dto.data, {
+        comSpie: !!eq.com_spie,
+        valvulasTestadas12m: !!eq.valvulas_testadas_12m,
       });
 
       // Override-friendly: respeita valor vindo do DTO; caso contrário usa cálculo NR-13.
@@ -145,10 +132,9 @@ export class InspecoesService {
           INSERT INTO inspecoes (
             id, equipamento_id, data, tipo, resultado,
             ph_nome, ph_crea, art, pmta_confirmada,
-            prox_externo, prox_interno, prox_hidro, prazo_complementos, observacoes,
-            teste_valvula_12m
+            prox_externo, prox_interno, prox_hidro, prazo_complementos, observacoes
           )
-          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         `).run(
           id,
           dto.equipamentoId,
@@ -164,7 +150,6 @@ export class InspecoesService {
           proxHidro,
           dto.prazoComplementos || null,
           dto.observacoes,
-          dto.testeValvula12m ? 1 : 0,
         );
       } catch (err: any) {
         const msg = String(err?.message || '');
@@ -228,12 +213,10 @@ export class InspecoesService {
     if (!existente) throw new NotFoundException('Inspeção não encontrada');
 
     const tx = this.db.instance.transaction(() => {
-      const eq = this.db.instance.prepare(`
-        SELECT e.categoria, e.tipo, e.recuperacao_alcalis, c.possui_spie
-        FROM equipamentos e
-        LEFT JOIN clientes c ON c.id = e.cliente_id
-        WHERE e.id = ?
-      `).get(existente.equipamento_id) as any;
+      const eq = this.db.instance.prepare(
+        `SELECT categoria, tipo, com_spie, valvulas_testadas_12m
+         FROM equipamentos WHERE id = ?`,
+      ).get(existente.equipamento_id) as any;
       if (!eq) throw new NotFoundException('Equipamento não encontrado.');
 
       // Valores finais — usa o que veio no DTO, senão mantém o existente.
@@ -241,16 +224,10 @@ export class InspecoesService {
       const tipo = dto.tipo !== undefined && dto.tipo !== '' ? dto.tipo : existente.tipo;
       const resultado = dto.resultado !== undefined && dto.resultado !== ''
         ? dto.resultado : existente.resultado;
-      const testeValvula12m = dto.testeValvula12m !== undefined
-        ? !!dto.testeValvula12m : !!existente.teste_valvula_12m;
 
-      const calc = calcularPrazosNR13(eq.categoria, data, {
-        comSpie: !!eq.possui_spie,
-        tipoEquipamento: tipoEhCaldeira(eq.tipo) ? 'caldeira' : 'vaso',
-        opcoesCaldeira: {
-          recuperacaoAlcalis: !!eq.recuperacao_alcalis,
-          testeValvula12m,
-        },
+      const calc = calcularPrazosEquipamento(eq.tipo, eq.categoria, data, {
+        comSpie: !!eq.com_spie,
+        valvulasTestadas12m: !!eq.valvulas_testadas_12m,
       });
 
       const proxExterno = dto.proxExterno !== undefined && dto.proxExterno !== ''
@@ -285,15 +262,13 @@ export class InspecoesService {
             data = ?, tipo = ?, resultado = ?,
             ph_nome = ?, ph_crea = ?, art = ?, pmta_confirmada = ?,
             prox_externo = ?, prox_interno = ?, prox_hidro = ?,
-            prazo_complementos = ?, observacoes = ?,
-            teste_valvula_12m = ?
+            prazo_complementos = ?, observacoes = ?
           WHERE id = ?
         `).run(
           data, tipo, resultado,
           phNome, phCrea, art, pmtaConfirmada,
           proxExterno, proxInterno, proxHidro,
           prazoComplementos, observacoes,
-          testeValvula12m ? 1 : 0,
           id,
         );
       } catch (err: any) {

@@ -317,71 +317,122 @@ export interface PrazosNR13 {
 }
 
 /* ----------------------------------------------------------------------------
- * 5.1 PERIODICIDADE DE CALDEIRAS (NR-13, item 13.4)
+ * 5.b PERIODICIDADE DE INSPECAO DE CALDEIRAS (NR-13, 13.4.4.4 e 13.4.4.5)
  * ----------------------------------------------------------------------------
- * REQ-01.1: caldeiras categorias A e B -> 12 meses.
- * REQ-01.2: caldeiras de recuperacao de alcalis (qualquer categoria) -> 15 meses.
- * REQ-01.3.1: caldeira categoria A com teste de pressao de abertura das
- *             valvulas de seguranca aos 12 meses -> 24 meses.
+ * Diferencas em relacao aos vasos de pressao:
+ *  - A inspecao periodica de caldeira e constituida por exames INTERNO e
+ *    EXTERNO realizados em conjunto -> prox_externo === prox_interno.
+ *  - Prazos sao definidos em MESES, nao em anos.
+ *  - O teste hidrostatico NAO possui periodicidade fixa na norma (obrigatorio
+ *    na fabricacao e na inspecao inicial; depois, a criterio do PLH)
+ *    -> prox_hidro = null.
+ *
+ * Prazos maximos (13.4.4.4 — estabelecimento SEM SPIE):
+ *  - 12 meses para caldeiras das categorias A e B (e C, regime mais restrito);
+ *  - 24 meses para caldeiras da categoria A, desde que aos 12 meses sejam
+ *    testadas as pressoes de abertura das valvulas de seguranca.
+ *
+ * Prazos maximos (13.4.4.5 — estabelecimento COM SPIE, Anexo II):
+ *  - 24 meses para caldeiras da categoria B;
+ *  - 30 meses para caldeiras da categoria A.
  * --------------------------------------------------------------------------*/
 
-export interface OpcoesCaldeira {
-  /** REQ-01.2 — caldeira de recuperacao de alcalis. */
-  recuperacaoAlcalis?: boolean;
-  /** REQ-01.3.1 — teste de pressao de abertura das valvulas aos 12 meses (cat A). */
-  testeValvula12m?: boolean;
-}
-
-/**
- * Periodicidade maxima (em MESES) para inspecao de caldeira.
- * Regras (ordem importa — mais restritiva primeiro):
- *  - recuperacaoAlcalis -> 15
- *  - cat A + testeValvula12m -> 24
- *  - A ou B -> 12
- *  - default (C) -> 12
- */
-export function prazoCaldeiraMeses(
-  categoria: CategoriaCaldeira | string | null | undefined,
-  opc: OpcoesCaldeira = {},
-): number {
-  if (opc.recuperacaoAlcalis) return 15;
-  const cat = String(categoria || '').toUpperCase();
-  if (cat === 'A' && opc.testeValvula12m) return 24;
-  if (cat === 'A' || cat === 'B') return 12;
-  return 12;
-}
-
-/** Opcoes do calculo unificado de prazos. */
-export interface OpcoesCalculoPrazo {
-  /** Estabelecimento possui SPIE (Anexo II) — usa Tabela 1.b para vasos. */
+export interface OpcoesPrazoCaldeira {
+  /** Estabelecimento certificado com SPIE (NR-13 Anexo II). */
   comSpie?: boolean;
-  /** 'vaso' (default) usa Tabela 1; 'caldeira' usa regras 13.4. */
-  tipoEquipamento?: 'vaso' | 'caldeira';
-  /** Opcoes especificas de caldeira (recuperacao alcalis, teste valvula). */
-  opcoesCaldeira?: OpcoesCaldeira;
+  /** Cat. A: valvulas de seguranca testadas aos 12 meses -> estende p/ 24. */
+  valvulasTestadas12m?: boolean;
 }
 
 /**
- * Calcula os proximos prazos NR-13 somando a periodicidade aplicavel a partir
- * da data da ultima inspecao.
+ * Periodicidade maxima da inspecao periodica de caldeira, em MESES.
+ * Retorna o prazo unico do par exame interno + externo.
+ */
+export function periodicidadeCaldeiraMeses(
+  categoria: CategoriaCaldeira,
+  opts: OpcoesPrazoCaldeira = {},
+): number {
+  if (opts.comSpie) {
+    return categoria === 'A' ? 30 : 24; // 13.4.4.5 (B e demais: 24)
+  }
+  if (categoria === 'A' && opts.valvulasTestadas12m) {
+    return 24; // 13.4.4.4 "c"
+  }
+  return 12; // 13.4.4.4 "a" — regra geral
+}
+
+/**
+ * Calcula os proximos prazos NR-13 para CALDEIRAS a partir da data da
+ * ultima inspecao. Interno e externo recebem a mesma data; hidrostatico
+ * fica sem prazo fixo (a criterio do PLH).
+ */
+export function calcularPrazosCaldeira(
+  categoria: string | null | undefined,
+  dtUltima: string | null | undefined,
+  opts: OpcoesPrazoCaldeira = {},
+): PrazosNR13 {
+  if (!categoria || !dtUltima) {
+    return { prox_externo: null, prox_interno: null, prox_hidro: null };
+  }
+  const cat = categoria.toUpperCase() as CategoriaCaldeira;
+  if (!['A', 'B', 'C'].includes(cat)) {
+    return { prox_externo: null, prox_interno: null, prox_hidro: null };
+  }
+
+  const base = new Date(`${String(dtUltima).slice(0, 10)}T12:00:00Z`);
+  if (isNaN(base.getTime())) {
+    return { prox_externo: null, prox_interno: null, prox_hidro: null };
+  }
+
+  const meses = periodicidadeCaldeiraMeses(cat, opts);
+  const d = new Date(base);
+  d.setUTCMonth(d.getUTCMonth() + meses);
+  const prazo = d.toISOString().slice(0, 10);
+
+  return { prox_externo: prazo, prox_interno: prazo, prox_hidro: null };
+}
+
+/** O tipo cadastrado representa uma caldeira? */
+export function isCaldeira(tipo: string | null | undefined): boolean {
+  return /caldeira/i.test(String(tipo || ''));
+}
+
+/**
+ * Dispatcher unico de prazos NR-13: roteia para a tabela de caldeiras
+ * (13.4.4.4/13.4.4.5) ou de vasos de pressao (Anexo IV, Tabela 1) conforme
+ * o tipo do equipamento.
+ */
+export function calcularPrazosEquipamento(
+  tipo: string | null | undefined,
+  categoria: string | null | undefined,
+  dtUltima: string | null | undefined,
+  opts: OpcoesPrazoCaldeira & { comSpie?: boolean } = {},
+): PrazosNR13 {
+  if (isCaldeira(tipo)) {
+    return calcularPrazosCaldeira(categoria, dtUltima, opts);
+  }
+  return calcularPrazosNR13(categoria, dtUltima, !!opts.comSpie);
+}
+
+/**
+ * Calcula os proximos prazos NR-13 somando a periodicidade da Tabela 1 a
+ * partir da data da ultima inspecao.
  *
- * Para vasos, usa a Tabela 1 (com ou sem SPIE conforme opts.comSpie).
- * Para caldeiras, aplica a regra de meses da NR-13 item 13.4.
- *
- * @param categoria  Categoria (vaso: I-V; caldeira: A-C).
+ * @param categoria  Categoria do vaso (I a V).
  * @param dtUltima   Data da ultima inspecao (YYYY-MM-DD).
- * @param opcOrSpie  Boolean legado (comSpie) ou objeto OpcoesCalculoPrazo.
+ * @param comSpie    true para usar a Tabela 1.b (estabelecimento com SPIE).
  */
 export function calcularPrazosNR13(
   categoria: string | null | undefined,
   dtUltima: string | null | undefined,
-  opcOrSpie: boolean | OpcoesCalculoPrazo = false,
+  comSpie = false,
 ): PrazosNR13 {
-  const opts: OpcoesCalculoPrazo = typeof opcOrSpie === 'boolean'
-    ? { comSpie: opcOrSpie }
-    : (opcOrSpie || {});
-
   if (!categoria || !dtUltima) {
+    return { prox_externo: null, prox_interno: null, prox_hidro: null };
+  }
+  const tabela = comSpie ? PERIODICIDADE_COM_SPIE : PERIODICIDADE_SEM_SPIE;
+  const cfg = tabela[categoria.toUpperCase() as CategoriaVaso];
+  if (!cfg) {
     return { prox_externo: null, prox_interno: null, prox_hidro: null };
   }
 
@@ -391,31 +442,11 @@ export function calcularPrazosNR13(
   }
 
   const addYears = (y: number): string | null => {
-    if (!y || y <= 0) return null;
+    if (!y || y <= 0) return null; // 0 = "a criterio", sem prazo fixo
     const d = new Date(base);
     d.setUTCFullYear(d.getUTCFullYear() + y);
     return d.toISOString().slice(0, 10);
   };
-  const addMonths = (m: number): string | null => {
-    if (!m || m <= 0) return null;
-    const d = new Date(base);
-    d.setUTCMonth(d.getUTCMonth() + m);
-    return d.toISOString().slice(0, 10);
-  };
-
-  // Caldeira: aplica meses uniformes (externo/interno; hidro segue mesma cadencia).
-  if (opts.tipoEquipamento === 'caldeira') {
-    const meses = prazoCaldeiraMeses(categoria as CategoriaCaldeira, opts.opcoesCaldeira);
-    const data = addMonths(meses);
-    return { prox_externo: data, prox_interno: data, prox_hidro: data };
-  }
-
-  // Vaso: tabela com/sem SPIE.
-  const tabela = opts.comSpie ? PERIODICIDADE_COM_SPIE : PERIODICIDADE_SEM_SPIE;
-  const cfg = tabela[categoria.toUpperCase() as CategoriaVaso];
-  if (!cfg) {
-    return { prox_externo: null, prox_interno: null, prox_hidro: null };
-  }
 
   return {
     prox_externo: addYears(cfg.ext),

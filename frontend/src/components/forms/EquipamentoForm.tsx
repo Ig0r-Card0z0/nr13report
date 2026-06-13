@@ -3,7 +3,11 @@ import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { clientesApi, equipamentosApi } from '@/lib/api';
 import { calcCategoria } from '@/lib/utils';
-import { FLUIDOS_NR13, classePadraoPorFluido } from '@/lib/nr13';
+import {
+  FLUIDOS_NR13, CLASSE_PADRAO_POR_FLUIDO,
+  isCaldeira, categorizarCaldeiraForm, periodicidadeCaldeiraMeses,
+  TIPOS_CALDEIRA, COMBUSTIVEIS_CALDEIRA, CategoriaCaldeira,
+} from '@/lib/nr13';
 import { Cliente } from '@/types';
 import toast from 'react-hot-toast';
 
@@ -18,6 +22,9 @@ export default function EquipamentoForm({ equipamentoId }: Props) {
     cat: string; grupo: string; pv: number; pvMpa: number; pvKpa: number;
     enquadrado: boolean; dispensaInternaHidro: boolean; observacao: string;
   } | null>(null);
+  const [caldInfo, setCaldInfo] = useState<{
+    categoria: CategoriaCaldeira; observacao: string; prazoMeses: number;
+  } | null>(null);
 
   const [form, setForm] = useState({
     clienteId: sp.get('clienteId') || '',
@@ -26,9 +33,26 @@ export default function EquipamentoForm({ equipamentoId }: Props) {
     fluido: 'Ar Comprimido', classeFluido: 'C', temperaturaProj: '',
     volume: '', pressaoOperacao: '', pmta: '', pressaoHidro: '', metalBase: '',
     categoria: '', grupoRisco: '',
+    // Campos específicos de caldeira (NR-13 item 13.4)
+    pressaoProjeto: '',
+    tipoCaldeira: 'Flamotubular', combustivel: 'GLP',
+    capacidadeTermica: '', areaAquecimento: '',
+    comSpie: false, valvulasTestadas12m: false,
   });
 
+  const ehCaldeira = isCaldeira(form.tipo);
+
   useEffect(() => { clientesApi.listar().then(setClientes); }, []);
+
+  // Ao trocar o tipo para Caldeira, sugere o fluido "Vapor d'água" (classe C)
+  // caso ainda esteja no padrão de vaso (Ar Comprimido).
+  useEffect(() => {
+    if (ehCaldeira) {
+      setForm(f => f.fluido === 'Ar Comprimido'
+        ? { ...f, fluido: "Vapor d'água", classeFluido: 'C' }
+        : f);
+    }
+  }, [ehCaldeira]);
   useEffect(() => {
     if (equipamentoId) equipamentosApi.buscar(equipamentoId).then(e => setForm({
       clienteId: e.cliente_id, tag: e.tag, tipo: e.tipo, fabricante: e.fabricante || '',
@@ -39,32 +63,57 @@ export default function EquipamentoForm({ equipamentoId }: Props) {
       volume: e.volume?.toString() || '', pressaoOperacao: e.pressao_operacao?.toString() || '',
       pmta: e.pmta?.toString() || '', pressaoHidro: e.pressao_hidro?.toString() || '',
       metalBase: e.metal_base || '', categoria: e.categoria || '', grupoRisco: e.grupo_risco || '',
+      pressaoProjeto: e.pressao_projeto?.toString() || '',
+      tipoCaldeira: e.tipo_caldeira || 'Flamotubular',
+      combustivel: e.combustivel || 'GLP',
+      capacidadeTermica: e.capacidade_termica?.toString() || '',
+      areaAquecimento: e.area_aquecimento?.toString() || '',
+      comSpie: !!e.com_spie, valvulasTestadas12m: !!e.valvulas_testadas_12m,
     }));
   }, [equipamentoId]);
 
   useEffect(() => {
+    if (ehCaldeira) {
+      // Caldeira: categoria A/B/C pela pressão de operação (e volume p/ cat. C)
+      const po = parseFloat(form.pressaoOperacao);
+      const v = parseFloat(form.volume);
+      if (po) {
+        const r = categorizarCaldeiraForm(po, isNaN(v) ? undefined : v);
+        const prazoMeses = periodicidadeCaldeiraMeses(r.categoria, {
+          comSpie: form.comSpie, valvulasTestadas12m: form.valvulasTestadas12m,
+        });
+        setCaldInfo({ categoria: r.categoria, observacao: r.observacao, prazoMeses });
+        setCatInfo(null);
+        setForm(f => ({ ...f, categoria: r.categoria, grupoRisco: '' }));
+      }
+      return;
+    }
+    setCaldInfo(null);
     const v = parseFloat(form.volume), pmta = parseFloat(form.pmta);
     if (v && pmta) {
       const r = calcCategoria(v, pmta, form.classeFluido);
       setCatInfo(r);
       setForm(f => ({ ...f, categoria: r.cat, grupoRisco: r.grupo }));
     }
-  }, [form.volume, form.pmta, form.classeFluido]);
+  }, [ehCaldeira, form.volume, form.pmta, form.classeFluido,
+      form.pressaoOperacao, form.comSpie, form.valvulasTestadas12m]);
 
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(f => ({ ...f, [k]: e.target.value }));
+  const setBool = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setForm(f => ({ ...f, [k]: e.target.checked }));
 
-  useEffect(() => {
-    const temperatura = parseFloat(form.temperaturaProj);
-    const classe = classePadraoPorFluido(form.fluido, Number.isFinite(temperatura) ? temperatura : undefined);
-    if (classe !== form.classeFluido) setForm(f => ({ ...f, classeFluido: classe }));
-  }, [form.fluido, form.temperaturaProj]);
-
+  // Ao escolher o fluido, aplica automaticamente a classe NR-13 padrão
+  // (Anexo II). Para fluidos com classe ambígua (ex.: "Outro") mantém a
+  // classe atual e deixa o usuário decidir manualmente.
   const onFluidoChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const fluido = e.target.value;
-    const temperatura = parseFloat(form.temperaturaProj);
-    const classe = classePadraoPorFluido(fluido, Number.isFinite(temperatura) ? temperatura : undefined);
-    setForm(f => ({ ...f, fluido, classeFluido: classe }));
+    const classePadrao = CLASSE_PADRAO_POR_FLUIDO[fluido];
+    setForm(f => ({
+      ...f,
+      fluido,
+      ...(classePadrao ? { classeFluido: classePadrao } : {}),
+    }));
   };
 
   const submit = async () => {
@@ -77,12 +126,21 @@ export default function EquipamentoForm({ equipamentoId }: Props) {
       pressaoOperacao: parseFloat(form.pressaoOperacao) || undefined,
       pressaoHidro: parseFloat(form.pressaoHidro) || undefined,
       temperaturaProj: parseFloat(form.temperaturaProj) || undefined,
+      pressaoProjeto: parseFloat(form.pressaoProjeto) || undefined,
+      capacidadeTermica: parseFloat(form.capacidadeTermica) || undefined,
+      areaAquecimento: parseFloat(form.areaAquecimento) || undefined,
+      // Campos de caldeira só são enviados quando o tipo é Caldeira
+      ...(ehCaldeira ? {} : {
+        tipoCaldeira: undefined, combustivel: undefined,
+        capacidadeTermica: undefined, areaAquecimento: undefined,
+        comSpie: undefined, valvulasTestadas12m: undefined,
+      }),
     };
     try {
       if (equipamentoId) await equipamentosApi.atualizar(equipamentoId, payload);
       else await equipamentosApi.criar(payload);
       toast.success('Equipamento salvo!');
-      router.push('/equipamentos');
+      router.push(form.clienteId ? `/clientes/${form.clienteId}` : '/equipamentos');
     } catch (err: any) {
       const msg = err?.response?.data?.message || err?.message || 'Erro ao salvar.';
       toast.error(String(msg));
@@ -144,6 +202,56 @@ export default function EquipamentoForm({ equipamentoId }: Props) {
         </div>
       </div>
 
+      {ehCaldeira && (
+        <>
+          <hr className="my-4 border-gray-100" />
+          <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+            Dados da caldeira <span className="normal-case font-normal text-gray-400">(NR-13 item 13.4)</span>
+          </div>
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <label className="label">Tipo de caldeira</label>
+              <select className="input" value={form.tipoCaldeira} onChange={set('tipoCaldeira')}>
+                {TIPOS_CALDEIRA.map(o => <option key={o}>{o}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Combustível</label>
+              <select className="input" value={form.combustivel} onChange={set('combustivel')}>
+                {COMBUSTIVEIS_CALDEIRA.map(o => <option key={o}>{o}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="label">Capacidade térmica (kcal/h)</label>
+              <input className="input" type="number" step="1" value={form.capacidadeTermica}
+                onChange={set('capacidadeTermica')} placeholder="512000" />
+            </div>
+            <div>
+              <label className="label">Área de aquecimento (m²)</label>
+              <input className="input" type="number" step="0.01" value={form.areaAquecimento}
+                onChange={set('areaAquecimento')} placeholder="18.86" />
+            </div>
+            <div>
+              <label className="label">Pressão de projeto (kgf/cm²)</label>
+              <input className="input" type="number" step="0.01" value={form.pressaoProjeto}
+                onChange={set('pressaoProjeto')} placeholder="10.55" />
+            </div>
+            <div className="col-span-2 flex items-end gap-6 pb-1">
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                <input type="checkbox" className="h-4 w-4 rounded border-gray-300"
+                  checked={form.comSpie} onChange={setBool('comSpie')} />
+                Estabelecimento com SPIE <span className="text-gray-400 text-xs">(Anexo II)</span>
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                <input type="checkbox" className="h-4 w-4 rounded border-gray-300"
+                  checked={form.valvulasTestadas12m} onChange={setBool('valvulasTestadas12m')} />
+                Válvulas de segurança testadas aos 12 meses <span className="text-gray-400 text-xs">(cat. A)</span>
+              </label>
+            </div>
+          </div>
+        </>
+      )}
+
       <hr className="my-4 border-gray-100" />
       <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Parâmetros operacionais</div>
       <div className="grid grid-cols-3 gap-4">
@@ -161,11 +269,11 @@ export default function EquipamentoForm({ equipamentoId }: Props) {
         </div>
         <div>
           <label className="label">Classe do fluido</label>
-          <select className="input" value={form.classeFluido} disabled>
-            <option value="A">Classe A – Inflamáveis / Combustíveis ≥ 200 °C / Tóxicos ≤ 20 ppm / Hidrogênio / Acetileno</option>
-            <option value="B">Classe B – Combustíveis &lt; 200 °C / Tóxicos &gt; 20 ppm</option>
-            <option value="C">Classe C – Vapor de água / Gases asfixiantes simples / Ar comprimido</option>
-            <option value="D">Classe D – Outros fluidos não enquadrados nas classes anteriores</option>
+          <select className="input" value={form.classeFluido} onChange={set('classeFluido')}>
+            <option value="A">Classe A – Inflamável / Combustível ≥ 200 °C / Tóxico ≤ 20 ppm / H₂ / acetileno</option>
+            <option value="B">Classe B – Combustível &lt; 200 °C / Tóxico &gt; 20 ppm</option>
+            <option value="C">Classe C – Vapor d'água / Ar comprimido / Asfixiante simples</option>
+            <option value="D">Classe D – Outros fluidos (água / líquidos &lt; 200 °C)</option>
           </select>
         </div>
         <div>
@@ -193,6 +301,30 @@ export default function EquipamentoForm({ equipamentoId }: Props) {
           <input className="input" value={form.metalBase} onChange={set('metalBase')} placeholder="ASME SA-36" />
         </div>
       </div>
+
+      {caldInfo && (
+        <div className="mt-3 space-y-2">
+          <div className="p-3 bg-primary-50 rounded-lg grid grid-cols-3 gap-4 text-sm">
+            <div>
+              <div className="text-xs text-gray-500">Categoria da caldeira</div>
+              <div className="font-bold text-primary-700">Cat. {caldInfo.categoria}</div>
+              <div className="text-[10px] text-gray-400">{caldInfo.observacao}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500">Inspeção periódica (int. + ext.)</div>
+              <div className="font-bold text-gray-900">a cada {caldInfo.prazoMeses} meses</div>
+              <div className="text-[10px] text-gray-400">
+                NR-13 {form.comSpie ? '13.4.4.5 (com SPIE)' : '13.4.4.4'}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-500">Teste hidrostático</div>
+              <div className="font-bold text-gray-900">A critério do PLH</div>
+              <div className="text-[10px] text-gray-400">Obrigatório na fabricação / insp. inicial</div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {catInfo && (
         <div className="mt-3 space-y-2">
