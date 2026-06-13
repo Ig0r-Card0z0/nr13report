@@ -219,11 +219,14 @@ export class DatabaseService implements OnModuleInit {
     this.addColumnIfMissing('clientes', 'profissional_id', 'TEXT REFERENCES profissionais(id) ON DELETE SET NULL');
     this.addColumnIfMissing('clientes', 'logo_filename', 'TEXT');
     this.addColumnIfMissing('medicoes_espessura', 'instrumento_id', 'TEXT REFERENCES instrumentos_medicao(id) ON DELETE SET NULL');
-
-    // NR-13: SPIE (estabelecimento), recuperação álcalis (caldeira), teste válvula 12m (inspeção).
-    this.addColumnIfMissing('clientes', 'possui_spie', 'INTEGER NOT NULL DEFAULT 0');
-    this.addColumnIfMissing('equipamentos', 'recuperacao_alcalis', 'INTEGER NOT NULL DEFAULT 0');
-    this.addColumnIfMissing('inspecoes', 'teste_valvula_12m', 'INTEGER NOT NULL DEFAULT 0');
+    // Campos específicos de CALDEIRA (NR-13 item 13.4)
+    this.addColumnIfMissing('equipamentos', 'pressao_projeto', 'REAL');                   // kgf/cm² — pressão de projeto
+    this.addColumnIfMissing('equipamentos', 'tipo_caldeira', 'TEXT');                      // Flamotubular / Aquatubular / Elétrica / Mista / Recuperação
+    this.addColumnIfMissing('equipamentos', 'combustivel', 'TEXT');                        // GLP, gás natural, óleo, biomassa...
+    this.addColumnIfMissing('equipamentos', 'capacidade_termica', 'REAL');                 // kcal/h
+    this.addColumnIfMissing('equipamentos', 'area_aquecimento', 'REAL');                   // m²
+    this.addColumnIfMissing('equipamentos', 'com_spie', 'INTEGER NOT NULL DEFAULT 0');     // estabelecimento com SPIE (Anexo II)
+    this.addColumnIfMissing('equipamentos', 'valvulas_testadas_12m', 'INTEGER NOT NULL DEFAULT 0'); // cat. A: válvulas testadas aos 12 meses
 
     // Bootstrap inicial: para cada combinação distinta de (ph_nome, ph_crea)
     // já existente em inspecoes, criar um Profissional correspondente.
