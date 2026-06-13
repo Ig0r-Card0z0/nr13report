@@ -137,6 +137,8 @@ export class RelatoriosService {
       : [];
 
     // ── 2. Derivados ─────────────────────────────────────────────────────────
+    const ehCaldeira  = /caldeira/i.test(String(eq.tipo || ''));
+    const rotuloEquip = ehCaldeira ? 'CALDEIRA GERADORA DE VAPOR' : 'VASO DE PRESSÃO';
     const pmta   = parseFloat(eq.pmta)   || 0;
     const vol    = parseFloat(eq.volume) || 0;
     const pvMpa  = pmta * 0.1 * vol;
@@ -566,7 +568,7 @@ export class RelatoriosService {
       doc.save().rect(ML, y, TW, idH).fill(C.azulC)
          .strokeColor(C.azulM).lineWidth(0.8).rect(ML, y, TW, idH).stroke().restore();
       doc.fillColor(C.azul).font('Helvetica-Bold').fontSize(10)
-         .text(`VASO DE PRESSÃO – ${eq.tag}`, ML, y + 8,
+         .text(`${rotuloEquip} – ${eq.tag}`, ML, y + 8,
                { align: 'center', width: TW, lineBreak: false });
 
       const sub1Y = y + 32;
@@ -595,7 +597,7 @@ export class RelatoriosService {
       novaPage(); sp(4);
       texto(
         `Este relatório tem como objetivo apresentar os resultados da Inspeção de Segurança ` +
-        `Periódica do Vaso de Pressão ${eq.tag}, ${eq.fabricante || ''}, ` +
+        `Periódica ${ehCaldeira ? 'da Caldeira' : 'do Vaso de Pressão'} ${eq.tag}, ${eq.fabricante || ''}, ` +
         `Nº de Série ${eq.serie || ''}, pertencente à empresa ${eq.cli_nome}, ` +
         `formalizando assim o cumprimento das exigências da Norma Reguladora do Ministério ` +
         `do Trabalho de nº 13 (NR-13).`
@@ -616,24 +618,48 @@ export class RelatoriosService {
       // ══════════════════════════════════════════════════════════════════════
       novaPage();
       secao('DADOS DO EQUIPAMENTO');
-      kvRow([
-        ['Equipamento:',            'VASO DE PRESSÃO'],
-        ['TAG:',                    eq.tag],
-        ['Fabricante:',             eq.fabricante || '—'],
-        ['Modelo:',                 '—'],
-        ['Nº de Série:',            eq.serie || '—'],
-        ['Ano:',                    String(eq.ano || '—')],
-        ['Código de Projeto:',      eq.codigo_projeto || '—'],
-        ['Local:',                  eq.local_instalacao || '—'],
-        ['Vertical/Horizontal:',    eq.posicao || '—'],
-        ['Categoria:',              cat],
-        ['Capacidade Vol (m³):',    fn(eq.volume, 3)],
-        ['Pressão Operação:',       `${fn(eq.pressao_operacao)} kgf/cm²`],
-        ['Temp. de Projeto:',       `${fn(eq.temperatura_projeto)} °C`],
-        ['PMTA:',                   `${fn(pmta)} bar`],
-        ['Pressão Teste Hidrost.:', `${fn(eq.pressao_hidro)} bar`],
-        ['Metal da Base:',          eq.metal_base || 'ASME SA-36'],
-      ]);
+      if (ehCaldeira) {
+        // Ficha específica de CALDEIRA (NR-13 item 13.4)
+        kvRow([
+          ['Equipamento:',            rotuloEquip],
+          ['TAG:',                    eq.tag],
+          ['Fabricante:',             eq.fabricante || '—'],
+          ['Modelo:',                 eq.serie ? String(eq.serie) : '—'],
+          ['Nº de Ordem:',            eq.serie || '—'],
+          ['Ano:',                    String(eq.ano || '—')],
+          ['Código de Projeto:',      eq.codigo_projeto || '—'],
+          ['Tipo:',                   (eq.tipo_caldeira || 'Flamotubular').toUpperCase()],
+          ['Vertical/Horizontal:',    eq.posicao || '—'],
+          ['Categoria:',              `"${cat}" - VAPOR`],
+          ['Capacidade:',             eq.capacidade_termica ? `${fn(eq.capacidade_termica, 0)} kcal/h` : '—'],
+          ['Pressão Operação:',       `${fn(eq.pressao_operacao)} kgf/cm²`],
+          ['Pressão Projeto:',        eq.pressao_projeto ? `${fn(eq.pressao_projeto)} kgf/cm²` : '—'],
+          ['PMTA:',                   `${fn(pmta)} kgf/cm²`],
+          ['Pressão Teste:',          `${fn(eq.pressao_hidro)} kgf/cm²`],
+          ['Área Aquecimento:',       eq.area_aquecimento ? `${fn(eq.area_aquecimento)} m²` : '—'],
+          ['Combustível:',            eq.combustivel || '—'],
+          ['Metal da Base:',          eq.metal_base || '—'],
+        ]);
+      } else {
+        kvRow([
+          ['Equipamento:',            'VASO DE PRESSÃO'],
+          ['TAG:',                    eq.tag],
+          ['Fabricante:',             eq.fabricante || '—'],
+          ['Modelo:',                 '—'],
+          ['Nº de Série:',            eq.serie || '—'],
+          ['Ano:',                    String(eq.ano || '—')],
+          ['Código de Projeto:',      eq.codigo_projeto || '—'],
+          ['Local:',                  eq.local_instalacao || '—'],
+          ['Vertical/Horizontal:',    eq.posicao || '—'],
+          ['Categoria:',              cat],
+          ['Capacidade Vol (m³):',    fn(eq.volume, 3)],
+          ['Pressão Operação:',       `${fn(eq.pressao_operacao)} kgf/cm²`],
+          ['Temp. de Projeto:',       `${fn(eq.temperatura_projeto)} °C`],
+          ['PMTA:',                   `${fn(pmta)} bar`],
+          ['Pressão Teste Hidrost.:', `${fn(eq.pressao_hidro)} bar`],
+          ['Metal da Base:',          eq.metal_base || 'ASME SA-36'],
+        ]);
+      }
       sp(3);
 
       secao('LOCALIDADE DA INSTALAÇÃO DO EQUIPAMENTO');
@@ -814,7 +840,7 @@ export class RelatoriosService {
       doc.save().rect(ML, y, TW, cbH).fill(C.azulC)
          .strokeColor(C.azulM).lineWidth(0.8).rect(ML, y, TW, cbH).stroke().restore();
       doc.fillColor(C.azul).font('Helvetica-Bold').fontSize(10)
-         .text(`VASO DE PRESSÃO – ${eq.tag}`, ML, y + 8, { align: 'center', width: TW });
+         .text(`${rotuloEquip} – ${eq.tag}`, ML, y + 8, { align: 'center', width: TW });
 
       const cbs1Y = y + 30;
       [`Classe ${classe}`, grp, `Categoria ${cat}`].forEach((t, i) => {

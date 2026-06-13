@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from '../../database/database.service';
 import { v4 as uuidv4 } from 'uuid';
-import { calcularPrazosNR13 } from '../../common/nr13';
+import { calcularPrazosEquipamento } from '../../common/nr13';
 
 export interface CreateEquipamentoDto {
   clienteId: string;
@@ -20,6 +20,7 @@ export interface CreateEquipamentoDto {
   pressaoOperacao?: number;
   pmta?: number;
   pressaoHidro?: number;
+  pressaoProjeto?: number;
   metalBase?: string;
   categoria?: string;
   grupoRisco?: string;
@@ -29,6 +30,13 @@ export interface CreateEquipamentoDto {
   proxExterno?: string;
   proxInterno?: string;
   proxHidro?: string;
+  // Campos específicos de CALDEIRA (NR-13 item 13.4)
+  tipoCaldeira?: string;
+  combustivel?: string;
+  capacidadeTermica?: number;
+  areaAquecimento?: number;
+  comSpie?: boolean | number;
+  valvulasTestadas12m?: boolean | number;
 }
 
 @Injectable()
@@ -71,7 +79,7 @@ export class EquipamentosService {
 
   create(dto: CreateEquipamentoDto) {
     const id = uuidv4();
-    const prazos = this.completarPrazos(dto.categoria, dto.dtUltimaInsp, {
+    const prazos = this.completarPrazos(dto, dto.categoria, dto.dtUltimaInsp, {
       prox_externo: dto.proxExterno,
       prox_interno: dto.proxInterno,
       prox_hidro:   dto.proxHidro,
@@ -81,8 +89,10 @@ export class EquipamentosService {
         id, cliente_id, tag, tipo, fabricante, serie, ano, posicao, codigo_projeto,
         local_instalacao, fluido, classe_fluido, temperatura_projeto, volume,
         pressao_operacao, pmta, pressao_hidro, metal_base, categoria, grupo_risco,
-        dt_ultima_insp, tipo_ultima_insp, art_ultima_insp, prox_externo, prox_interno, prox_hidro
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        dt_ultima_insp, tipo_ultima_insp, art_ultima_insp, prox_externo, prox_interno, prox_hidro,
+        pressao_projeto, tipo_caldeira, combustivel, capacidade_termica, area_aquecimento,
+        com_spie, valvulas_testadas_12m
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       id, dto.clienteId, dto.tag, dto.tipo || 'Vaso de Pressão',
       dto.fabricante, dto.serie, dto.ano, dto.posicao || 'Vertical',
@@ -90,7 +100,10 @@ export class EquipamentosService {
       dto.temperaturaProj, dto.volume, dto.pressaoOperacao, dto.pmta,
       dto.pressaoHidro, dto.metalBase, dto.categoria, dto.grupoRisco,
       dto.dtUltimaInsp, dto.tipoUltimaInsp, dto.artUltimaInsp,
-      prazos.prox_externo, prazos.prox_interno, prazos.prox_hidro
+      prazos.prox_externo, prazos.prox_interno, prazos.prox_hidro,
+      dto.pressaoProjeto,
+      dto.tipoCaldeira, dto.combustivel, dto.capacidadeTermica, dto.areaAquecimento,
+      dto.comSpie ? 1 : 0, dto.valvulasTestadas12m ? 1 : 0
     );
     return this.findOne(id);
   }
@@ -98,14 +111,21 @@ export class EquipamentosService {
   /**
    * Quando o front não envia explicitamente prox_externo / prox_interno / prox_hidro
    * e há categoria + data da última inspeção, completa os prazos com base na NR-13.
+   * O cálculo é roteado pelo TIPO do equipamento:
+   *  - Caldeira  -> 13.4.4.4 / 13.4.4.5 (meses; interno = externo; hidro a critério do PLH)
+   *  - Vaso      -> Anexo IV, Tabela 1 (anos)
    * Valor explícito do front (mesmo string vazia) é respeitado como override do engenheiro.
    */
   private completarPrazos(
+    ctx: { tipo?: string; comSpie?: boolean | number; valvulasTestadas12m?: boolean | number },
     categoria: string | undefined,
     dtUltimaInsp: string | undefined,
     explicit: { prox_externo?: string; prox_interno?: string; prox_hidro?: string },
   ) {
-    const calc = calcularPrazosNR13(categoria, dtUltimaInsp);
+    const calc = calcularPrazosEquipamento(ctx.tipo, categoria, dtUltimaInsp, {
+      comSpie: !!ctx.comSpie,
+      valvulasTestadas12m: !!ctx.valvulasTestadas12m,
+    });
     return {
       prox_externo: explicit.prox_externo !== undefined ? explicit.prox_externo : calc.prox_externo,
       prox_interno: explicit.prox_interno !== undefined ? explicit.prox_interno : calc.prox_interno,
@@ -124,21 +144,39 @@ export class EquipamentosService {
       categoria: 'categoria', grupoRisco: 'grupo_risco', dtUltimaInsp: 'dt_ultima_insp',
       tipoUltimaInsp: 'tipo_ultima_insp', artUltimaInsp: 'art_ultima_insp',
       proxExterno: 'prox_externo', proxInterno: 'prox_interno', proxHidro: 'prox_hidro',
+      pressaoProjeto: 'pressao_projeto',
+      tipoCaldeira: 'tipo_caldeira', combustivel: 'combustivel',
+      capacidadeTermica: 'capacidade_termica', areaAquecimento: 'area_aquecimento',
+      comSpie: 'com_spie', valvulasTestadas12m: 'valvulas_testadas_12m',
     };
 
+    // Normaliza booleanos -> 0/1 para o SQLite
+    if (dto.comSpie !== undefined) dto = { ...dto, comSpie: dto.comSpie ? 1 : 0 };
+    if (dto.valvulasTestadas12m !== undefined) {
+      dto = { ...dto, valvulasTestadas12m: dto.valvulasTestadas12m ? 1 : 0 };
+    }
+
     // Auto-completa prazos NR-13 quando o front não envia explicitamente
-    // mas atualiza categoria ou data da última inspeção.
+    // mas atualiza tipo, categoria, data da última inspeção ou regime (SPIE / válvulas).
+    const tocouTipo        = dto.tipo !== undefined;
     const tocouCategoria   = dto.categoria !== undefined;
     const tocouDtInsp      = dto.dtUltimaInsp !== undefined;
+    const tocouRegime      = dto.comSpie !== undefined || dto.valvulasTestadas12m !== undefined;
     const enviouAlgumPrazo =
       dto.proxExterno !== undefined ||
       dto.proxInterno !== undefined ||
       dto.proxHidro   !== undefined;
 
-    if ((tocouCategoria || tocouDtInsp) && !enviouAlgumPrazo) {
-      const cat = tocouCategoria ? dto.categoria : atual.categoria;
+    if ((tocouTipo || tocouCategoria || tocouDtInsp || tocouRegime) && !enviouAlgumPrazo) {
+      const tipo  = tocouTipo ? dto.tipo : atual.tipo;
+      const cat   = tocouCategoria ? dto.categoria : atual.categoria;
       const dtIns = tocouDtInsp ? dto.dtUltimaInsp : atual.dt_ultima_insp;
-      const calc = calcularPrazosNR13(cat, dtIns);
+      const comSpie = dto.comSpie !== undefined ? !!dto.comSpie : !!atual.com_spie;
+      const valv = dto.valvulasTestadas12m !== undefined
+        ? !!dto.valvulasTestadas12m : !!atual.valvulas_testadas_12m;
+      const calc = calcularPrazosEquipamento(tipo, cat, dtIns, {
+        comSpie, valvulasTestadas12m: valv,
+      });
       if (calc.prox_externo) dto = { ...dto, proxExterno: calc.prox_externo };
       if (calc.prox_interno) dto = { ...dto, proxInterno: calc.prox_interno };
       if (calc.prox_hidro)   dto = { ...dto, proxHidro:   calc.prox_hidro };

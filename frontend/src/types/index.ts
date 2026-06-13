@@ -61,6 +61,14 @@ export interface Equipamento {
   prox_externo?: string;
   prox_interno?: string;
   prox_hidro?: string;
+  // Campos específicos de caldeira (NR-13 item 13.4)
+  pressao_projeto?: number;
+  tipo_caldeira?: string;
+  combustivel?: string;
+  capacidade_termica?: number;
+  area_aquecimento?: number;
+  com_spie?: number;
+  valvulas_testadas_12m?: number;
   foto_capa_id?: string | null;
   total_inspecoes?: number;
   total_fotos?: number;

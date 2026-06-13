@@ -3,7 +3,7 @@ import { DatabaseService } from '../../database/database.service';
 import { v4 as uuidv4 } from 'uuid';
 import { existsSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import { calcularPrazosNR13 } from '../../common/nr13';
+import { calcularPrazosEquipamento } from '../../common/nr13';
 
 export interface CreateInspecaoDto {
   equipamentoId: string;
@@ -97,11 +97,17 @@ export class InspecoesService {
     const tx = this.db.instance.transaction(() => {
       // Busca categoria do equipamento para auto-calcular prazos NR-13 que não vierem no DTO
       const eq = this.db.instance.prepare(
-        `SELECT categoria FROM equipamentos WHERE id = ?`,
+        `SELECT categoria, tipo, com_spie, valvulas_testadas_12m
+         FROM equipamentos WHERE id = ?`,
       ).get(dto.equipamentoId) as any;
       if (!eq) throw new NotFoundException('Equipamento não encontrado.');
 
-      const calc = calcularPrazosNR13(eq.categoria, dto.data);
+      // Roteia o cálculo NR-13 pelo tipo do equipamento:
+      // Caldeira -> 13.4.4.4/13.4.4.5 (meses) | Vaso -> Anexo IV Tabela 1 (anos)
+      const calc = calcularPrazosEquipamento(eq.tipo, eq.categoria, dto.data, {
+        comSpie: !!eq.com_spie,
+        valvulasTestadas12m: !!eq.valvulas_testadas_12m,
+      });
 
       // Override-friendly: respeita valor vindo do DTO; caso contrário usa cálculo NR-13.
       const proxExterno = dto.proxExterno !== undefined && dto.proxExterno !== ''
@@ -208,7 +214,8 @@ export class InspecoesService {
 
     const tx = this.db.instance.transaction(() => {
       const eq = this.db.instance.prepare(
-        `SELECT categoria FROM equipamentos WHERE id = ?`,
+        `SELECT categoria, tipo, com_spie, valvulas_testadas_12m
+         FROM equipamentos WHERE id = ?`,
       ).get(existente.equipamento_id) as any;
       if (!eq) throw new NotFoundException('Equipamento não encontrado.');
 
@@ -218,7 +225,10 @@ export class InspecoesService {
       const resultado = dto.resultado !== undefined && dto.resultado !== ''
         ? dto.resultado : existente.resultado;
 
-      const calc = calcularPrazosNR13(eq.categoria, data);
+      const calc = calcularPrazosEquipamento(eq.tipo, eq.categoria, data, {
+        comSpie: !!eq.com_spie,
+        valvulasTestadas12m: !!eq.valvulas_testadas_12m,
+      });
 
       const proxExterno = dto.proxExterno !== undefined && dto.proxExterno !== ''
         ? dto.proxExterno : (existente.prox_externo || calc.prox_externo);

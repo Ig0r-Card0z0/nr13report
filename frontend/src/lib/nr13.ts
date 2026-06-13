@@ -340,3 +340,112 @@ export function calcularPrazosNR13(
     proxHidro:   addYears(cfg.hid),
   };
 }
+
+/* ----------------------------------------------------------------------------
+ * 6. PERIODICIDADE DE INSPEÇÃO DE CALDEIRAS (NR-13, 13.4.4.4 e 13.4.4.5)
+ * ----------------------------------------------------------------------------
+ * Diferenças em relação aos vasos de pressão:
+ *  - Inspeção periódica = exames INTERNO + EXTERNO em conjunto
+ *    → próxima externa === próxima interna.
+ *  - Prazos em MESES (não anos).
+ *  - Teste hidrostático sem periodicidade fixa (obrigatório na fabricação e
+ *    na inspeção inicial; depois a critério do PLH) → proxHidro = null.
+ *
+ * Sem SPIE (13.4.4.4):
+ *  - 12 meses — categorias A e B (regra geral; cat. C idem);
+ *  - 24 meses — categoria A, desde que aos 12 meses sejam testadas as
+ *    pressões de abertura das válvulas de segurança.
+ * Com SPIE (13.4.4.5 / Anexo II):
+ *  - 24 meses — categoria B;
+ *  - 30 meses — categoria A.
+ * --------------------------------------------------------------------------*/
+
+export interface OpcoesPrazoCaldeira {
+  comSpie?: boolean;
+  valvulasTestadas12m?: boolean;
+}
+
+/** Periodicidade máxima da inspeção periódica de caldeira, em meses. */
+export function periodicidadeCaldeiraMeses(
+  categoria: CategoriaCaldeira,
+  opts: OpcoesPrazoCaldeira = {},
+): number {
+  if (opts.comSpie) return categoria === 'A' ? 30 : 24;
+  if (categoria === 'A' && opts.valvulasTestadas12m) return 24;
+  return 12;
+}
+
+/** Versão textual para a interface. */
+export function prazoCaldeiraTexto(
+  categoria: CategoriaCaldeira,
+  opts: OpcoesPrazoCaldeira = {},
+): string {
+  return `${periodicidadeCaldeiraMeses(categoria, opts)} meses`;
+}
+
+/**
+ * Calcula os próximos prazos NR-13 para CALDEIRAS. Interno e externo
+ * recebem a mesma data; hidrostático fica a critério do PLH (null).
+ */
+export function calcularPrazosCaldeira(
+  categoria: string | null | undefined,
+  dtUltimaInsp: string | null | undefined,
+  opts: OpcoesPrazoCaldeira = {},
+): { proxExterno: string | null; proxInterno: string | null; proxHidro: string | null } {
+  if (!categoria || !dtUltimaInsp) {
+    return { proxExterno: null, proxInterno: null, proxHidro: null };
+  }
+  const cat = String(categoria).toUpperCase() as CategoriaCaldeira;
+  if (!['A', 'B', 'C'].includes(cat)) {
+    return { proxExterno: null, proxInterno: null, proxHidro: null };
+  }
+  const base = new Date(`${String(dtUltimaInsp).slice(0, 10)}T12:00:00Z`);
+  if (isNaN(base.getTime())) {
+    return { proxExterno: null, proxInterno: null, proxHidro: null };
+  }
+  const d = new Date(base);
+  d.setUTCMonth(d.getUTCMonth() + periodicidadeCaldeiraMeses(cat, opts));
+  const prazo = d.toISOString().slice(0, 10);
+  return { proxExterno: prazo, proxInterno: prazo, proxHidro: null };
+}
+
+/** O tipo cadastrado representa uma caldeira? */
+export function isCaldeira(tipo: string | null | undefined): boolean {
+  return /caldeira/i.test(String(tipo || ''));
+}
+
+/** Tipos construtivos de caldeira (NR-13 item 13.4). */
+export const TIPOS_CALDEIRA = [
+  'Flamotubular',
+  'Aquatubular',
+  'Mista',
+  'Elétrica',
+  'Recuperação de álcalis',
+] as const;
+
+/** Combustíveis usuais para o cadastro. */
+export const COMBUSTIVEIS_CALDEIRA = [
+  'GLP',
+  'Gás natural',
+  'Óleo combustível (BPF)',
+  'Diesel',
+  'Lenha / Biomassa',
+  'Bagaço de cana',
+  'Cavaco de madeira',
+  'Licor negro (recuperação)',
+  'Eletricidade',
+  'Outro',
+] as const;
+
+/**
+ * Categorização de caldeira a partir das unidades do formulário:
+ * pressão de operação em kgf/cm² e volume em m³.
+ */
+export function categorizarCaldeiraForm(
+  pressaoOperacaoKgf: number,
+  volumeM3?: number,
+): ResultadoCategoriaCaldeira {
+  const pKpa = pressaoParaKpa(pressaoOperacaoKgf, 'kgf/cm2');
+  const litros = volumeM3 != null && !isNaN(volumeM3) ? volumeM3 * 1000 : Infinity;
+  return categorizarCaldeira(pKpa, litros);
+}
