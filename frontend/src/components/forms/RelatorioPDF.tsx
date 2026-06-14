@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react';
 import { Equipamento, Inspecao, Foto, MedicaoEspessura } from '@/types';
 import { relatoriosApi } from '@/lib/api';
 import { fmtData } from '@/lib/utils';
-import { Download, FileText, CheckCircle, Eye, X, FileType, SlidersHorizontal } from 'lucide-react';
+import { Download, FileText, CheckCircle, Eye, X, FileType, SlidersHorizontal, BookOpen } from 'lucide-react';
 import { EditorResultadoInspecao, Overrides } from './EditorResultadoInspecao';
 import { Tabs } from '@/components/ui/Tabs';
 
@@ -18,6 +18,7 @@ interface Props {
 export function RelatorioPDF({ equipamento: eq, inspecoes, fotos, medicao, inspecaoId }: Props) {
   const inspecao = inspecaoId ? inspecoes.find(i => i.id === inspecaoId) : inspecoes[0];
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [livroOpen, setLivroOpen] = useState(false);
   const [aba, setAba] = useState<'gerar' | 'resultado'>('gerar');
   // Overrides da seção 4/5.1 — vazio = relatório usa todos os valores padrão.
   const [overrides, setOverrides] = useState<Overrides>({});
@@ -34,6 +35,9 @@ export function RelatorioPDF({ equipamento: eq, inspecoes, fotos, medicao, inspe
   const docxUrlDownload = inspecaoId
     ? relatoriosApi.urlDOCXInspecaoDownload(eq.id, inspecaoId, overrides)
     : relatoriosApi.urlDOCXDownload(eq.id);
+  const livroUrl = inspecaoId ? relatoriosApi.urlLivroInspecao(eq.id, inspecaoId) : relatoriosApi.urlLivro(eq.id);
+  const livroUrlDownload = inspecaoId ? relatoriosApi.urlLivroInspecaoDownload(eq.id, inspecaoId) : relatoriosApi.urlLivroDownload(eq.id);
+  const ehCaldeira = /caldeira/i.test(String(eq.tipo || ''));
 
   const itens = useMemo(() => ([
     { label: 'Identificação do equipamento', ok: !!eq.tag },
@@ -199,6 +203,41 @@ export function RelatorioPDF({ equipamento: eq, inspecoes, fotos, medicao, inspe
           ].map(s => <div key={s} className="flex items-center gap-2"><CheckCircle size={13} className="text-green-400 flex-shrink-0" />{s}</div>)}
         </div>
       </div>
+
+      {/* Anotação no Livro de Registro de Segurança (NR-13) */}
+      <div className="mt-5 bg-white border border-gray-200 rounded-xl p-6 text-center">
+        <BookOpen className="w-11 h-11 mx-auto mb-3 text-primary-700" />
+        <h3 className="text-base font-semibold text-gray-900 mb-1">
+          Anotação no Livro de Registro de Segurança
+        </h3>
+        <p className="text-sm text-gray-500 mb-1">
+          Documento sintético para o Livro de Registro, conforme NR-13
+          {ehCaldeira ? ' (modelo de caldeira)' : ' (modelo de vaso de pressão)'}.
+        </p>
+        <p className="text-xs text-gray-400 mb-5">
+          Traz a identificação do equipamento, a inspeção realizada, os prazos das próximas
+          inspeções e a ART — adaptado automaticamente ao tipo do equipamento.
+        </p>
+        <div className="flex flex-col sm:flex-row gap-3 justify-center">
+          <button
+            type="button"
+            onClick={() => setLivroOpen(true)}
+            className="btn px-8 py-2.5 text-sm inline-flex items-center gap-2 justify-center"
+          >
+            <Eye size={18} />
+            Visualizar prévia
+          </button>
+          <a
+            href={livroUrlDownload}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn btn-primary px-8 py-2.5 text-sm inline-flex items-center gap-2 justify-center"
+          >
+            <Download size={18} />
+            Gerar e baixar
+          </a>
+        </div>
+      </div>
       </div>
       {/* Fim painel "Gerar Relatório" */}
 
@@ -228,6 +267,41 @@ export function RelatorioPDF({ equipamento: eq, inspecoes, fotos, medicao, inspe
               <iframe
                 title="Prévia do relatório em PDF"
                 src={pdfUrl}
+                className="w-full h-[75vh]"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {livroOpen && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-4xl overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-gray-900 truncate">
+                  Prévia — Anotação no Livro de Registro
+                </div>
+                <div className="text-xs text-gray-500 truncate">{eq.tag} — {eq.cliente_nome}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <a
+                  href={livroUrlDownload}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn btn-sm btn-primary"
+                >
+                  <Download size={14} /> Baixar
+                </a>
+                <button type="button" onClick={() => setLivroOpen(false)} className="btn btn-sm">
+                  <X size={14} /> Fechar
+                </button>
+              </div>
+            </div>
+            <div className="bg-gray-100">
+              <iframe
+                title="Prévia da anotação no livro de registro"
+                src={livroUrl}
                 className="w-full h-[75vh]"
               />
             </div>

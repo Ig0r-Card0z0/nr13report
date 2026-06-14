@@ -1394,4 +1394,305 @@ export class RelatoriosService {
       return baseBuffer;
     }
   }
+
+  /**
+   * Gera a ANOTAÇÃO no LIVRO DE REGISTRO DE SEGURANÇA (NR-13 13.4.4.6.b / 13.5.4).
+   * Documento sintético que registra a inspeção realizada, as especificações do
+   * equipamento e os prazos das próximas inspeções. O conteúdo se ADAPTA ao tipo:
+   *  - Caldeira: capacidade de produção de vapor, área de aquecimento, combustível;
+   *  - Vaso de pressão: volume, PMTA, P×V, grupo de risco, classe de fluido.
+   */
+  async gerarAnotacaoLivro(equipamentoId: string, inspecaoId?: string): Promise<Buffer> {
+    const db = this.db.instance;
+
+    const eq = db.prepare(`
+      SELECT e.*,
+             c.nome AS cli_nome, c.cnpj, c.tel, c.email,
+             c.logradouro, c.numero AS cli_num, c.bairro,
+             c.cidade, c.uf, c.responsavel, c.cargo
+      FROM equipamentos e
+      JOIN clientes c ON e.cliente_id = c.id
+      WHERE e.id = ?
+    `).get(equipamentoId) as any;
+    if (!eq) throw new NotFoundException('Equipamento não encontrado');
+
+    const insp = inspecaoId
+      ? db.prepare(`SELECT * FROM inspecoes WHERE id = ? AND equipamento_id = ?`).get(inspecaoId, equipamentoId) as any
+      : db.prepare(`SELECT * FROM inspecoes WHERE equipamento_id = ? ORDER BY data DESC LIMIT 1`).get(equipamentoId) as any;
+    if (inspecaoId && !insp) throw new NotFoundException('Inspeção não encontrada para este equipamento');
+
+    // ── Derivados comuns ─────────────────────────────────────────────────────
+    const ehCaldeira = /caldeira/i.test(String(eq.tipo || ''));
+    const rotuloTipo = ehCaldeira ? 'CALDEIRA' : 'VASO DE PRESSÃO';
+    const cat        = eq.categoria || (ehCaldeira ? 'B' : 'V');
+    const dtInsp     = insp?.data || new Date().toISOString().split('T')[0];
+    const phNome     = insp?.ph_nome || 'Igor Cardozo e Oliveira Santos';
+    const phCrea     = insp?.ph_crea || '041725365-6';
+    const art        = insp?.art || '—';
+    const resultado  = insp?.resultado || 'Satisfatório, equipamento apto à operação';
+    const tipoInsp   = insp?.tipo || 'Periódica';
+    const ano        = new Date(dtInsp).getFullYear();
+    const numRel     = `01/${ano}`;
+
+    // Endereço da instalação
+    const endereco = [
+      eq.logradouro, eq.cli_num ? `nº ${eq.cli_num}` : null,
+      eq.bairro, eq.cidade && eq.uf ? `${eq.cidade}/${eq.uf}` : eq.cidade,
+    ].filter(Boolean).join(', ') || '—';
+
+    // ── Especificações que variam por tipo ───────────────────────────────────
+    // Cada item é [rótulo, valor]. As listas alimentam a tabela de identificação.
+    const especificas: [string, string][] = ehCaldeira
+      ? [
+          ['Tipo:', (eq.tipo_caldeira || 'Flamotubular').toUpperCase()],
+          ['Capacidade de produção:', eq.capacidade_termica ? `${fn(eq.capacidade_termica, 0)} kg.v/h` : '—'],
+          ['Área de aquecimento:', eq.area_aquecimento ? `${fn(eq.area_aquecimento)} m²` : '—'],
+          ['Combustível:', eq.combustivel || '—'],
+          ['Pressão de operação:', `${fn(eq.pressao_operacao)} kgf/cm²`],
+          ['Pressão de projeto:', eq.pressao_projeto ? `${fn(eq.pressao_projeto)} kgf/cm²` : '—'],
+          ['PMTA:', `${fn(eq.pmta)} kgf/cm²`],
+          ['Pressão de teste:', `${fn(eq.pressao_hidro)} kgf/cm²`],
+          ['Categoria:', `"${cat}" - VAPOR`],
+        ]
+      : [
+          ['Fluido:', eq.fluido || '—'],
+          ['Classe do fluido:', eq.classe_fluido || '—'],
+          ['Volume:', eq.volume ? `${fn(eq.volume, 3)} m³` : '—'],
+          ['Pressão de operação:', `${fn(eq.pressao_operacao)} kgf/cm²`],
+          ['PMTA:', `${fn(eq.pmta)} kgf/cm²`],
+          ['Pressão de teste:', `${fn(eq.pressao_hidro)} kgf/cm²`],
+          ['Temp. de projeto:', eq.temperatura_projeto != null ? `${fn(eq.temperatura_projeto)} °C` : '—'],
+          ['Grupo de risco:', eq.grupo_risco || '—'],
+          ['Categoria:', String(cat)],
+        ];
+
+    // ── Prazos das próximas inspeções ────────────────────────────────────────
+    // Caldeira: interno = externo; hidrostático a critério do PLH.
+    const proxExt = insp?.prox_externo || eq.prox_externo;
+    const proxInt = insp?.prox_interno || eq.prox_interno;
+    const proxHid = insp?.prox_hidro   || eq.prox_hidro;
+
+    // ── Montagem do PDF ──────────────────────────────────────────────────────
+    return await new Promise<Buffer>((resolve, reject) => {
+      const doc = new PDFDocument({
+        size: 'A4',
+        margins: { top: MT, bottom: 0, left: ML, right: ML },
+        autoFirstPage: false,
+        info: {
+          Title: `Anotação Livro de Registro – ${eq.tag}`,
+          Author: 'NORT.END Engenharia e Inspeção',
+        },
+      });
+      const chunks: Buffer[] = [];
+      doc.on('data', c => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+
+      // Fontes DejaVu (em assets/) renderizam ² e ³ — glifos que a Helvetica AFM
+      // padrão do PDFKit omite. Usadas em todo o corpo da anotação para coesão.
+      // Fallback seguro para Helvetica caso os arquivos não estejam presentes.
+      const FA = path.join(process.cwd(), 'assets');
+      const fReg = path.join(FA, 'DejaVuSans.ttf');
+      const fBold = path.join(FA, 'DejaVuSans-Bold.ttf');
+      const fObl = path.join(FA, 'DejaVuSans-Oblique.ttf');
+      let FONT = 'Helvetica', FONT_B = 'Helvetica-Bold', FONT_O = 'Helvetica-Oblique';
+      if (fs.existsSync(fReg)) { doc.registerFont('DV', fReg); FONT = 'DV'; }
+      if (fs.existsSync(fBold)) { doc.registerFont('DV-B', fBold); FONT_B = 'DV-B'; }
+      if (fs.existsSync(fObl)) { doc.registerFont('DV-O', fObl); FONT_O = 'DV-O'; }
+
+      let y = CONTENT_TOP;
+      let pageNum = 0;
+      let drawingHF = false;
+
+      const drawHF = (pg: number) => {
+        drawingHF = true;
+        doc.save();
+        doc.rect(ML, HDRY, TW, HDRH).fill(C.azul);
+        const cL = TW * 0.30, cT = TW * 0.48, cR = TW * 0.11, cP = TW * 0.11;
+        const xL = ML, xT = xL + cL, xR = xT + cT, xPg = xR + cR;
+        const midY = HDRY + HDRH / 2;
+        doc.strokeColor(C.branco).lineWidth(0.5);
+        for (const x of [xT, xR, xPg]) {
+          doc.moveTo(x, HDRY + 4).lineTo(x, HDRY + HDRH - 4).stroke();
+        }
+        if (fs.existsSync(LOGO)) {
+          doc.image(LOGO, xL + 3, HDRY + 3, { width: cL - 6, height: HDRH - 6, fit: [cL - 6, HDRH - 6] });
+        } else {
+          doc.fillColor(C.branco).font(FONT_B).fontSize(8)
+             .text('NORT.END', xL + 4, midY - 6, { lineBreak: false });
+        }
+        doc.fillColor(C.branco).font(FONT_B).fontSize(8)
+           .text('ANOTAÇÃO — LIVRO DE REGISTRO NR-13', xT, midY - 6,
+                 { width: cT, align: 'center', lineBreak: false });
+        doc.font(FONT_B).fontSize(8).fillColor(C.azulC)
+           .text('Relatório:', xR, midY - 12, { width: cR, align: 'center', lineBreak: false });
+        doc.font(FONT).fontSize(8).fillColor(C.branco)
+           .text(numRel, xR, midY + 2, { width: cR, align: 'center', lineBreak: false });
+        doc.font(FONT_B).fontSize(8).fillColor(C.azulC)
+           .text('Página', xPg, midY - 12, { width: cP, align: 'center', lineBreak: false });
+        doc.font(FONT).fontSize(8).fillColor(C.branco)
+           .text(String(pg), xPg, midY + 2, { width: cP, align: 'center', lineBreak: false });
+        doc.strokeColor(C.laranja).lineWidth(0.8)
+           .moveTo(ML, FTRY - 14).lineTo(ML + TW, FTRY - 14).stroke();
+        doc.fillColor(C.cinzaT).font(FONT).fontSize(7)
+           .text('Nort.End - Engenharia e Inspeção  |  92 99387.6271  |  eng.nortend@gmail.com  |  ' +
+                 'CNPJ: 36.724.646/0001-69  |  CREA-AM: 041725365-6',
+                 ML, FTRY - 9, { width: TW, align: 'center', lineBreak: false });
+        doc.restore();
+        doc.x = ML; doc.y = CONTENT_TOP;
+        drawingHF = false;
+      };
+
+      doc.on('pageAdded', () => { if (drawingHF) return; pageNum++; drawHF(pageNum); });
+      const novaPage = () => { doc.addPage(); y = CONTENT_TOP; doc.x = ML; doc.y = CONTENT_TOP; };
+      const checar = (n = 50) => { if (y + n > CONTENT_BOTTOM) novaPage(); };
+
+      const secao = (txt: string) => {
+        const label = txt.toUpperCase();
+        doc.font(FONT_B).fontSize(10);
+        const txtH = doc.heightOfString(label, { width: TW - 16 });
+        const bh = Math.max(26, txtH + 14);
+        checar(bh + 6);
+        doc.save().rect(ML, y, TW, bh).fill(C.secaoBg)
+           .strokeColor(C.laranja).lineWidth(1.5)
+           .moveTo(ML, y + bh).lineTo(ML + TW, y + bh).stroke().restore();
+        doc.fillColor(C.secaoTxt).font(FONT_B).fontSize(10)
+           .text(label, ML + 8, y + (bh - txtH) / 2, { width: TW - 16 });
+        y += bh + 6;
+      };
+
+      // Tabela 2 colunas (rótulo cinza | valor) — uma dupla por linha
+      const kvRow = (pairs: [string, string][], rhMin = 19) => {
+        const cw = TW / 4;
+        const padX = 5, padY = 4;
+        for (let i = 0; i < pairs.length; i += 2) {
+          let maxTxtH = 0;
+          const cells = [pairs[i][0], pairs[i][1] || '—', pairs[i + 1]?.[0] || '', pairs[i + 1]?.[1] || ''];
+          cells.forEach((c, ci) => {
+            if (!c) return;
+            doc.font(ci % 2 === 0 ? FONT_B : FONT).fontSize(9);
+            const h = doc.heightOfString(c, { width: cw - 2 * padX });
+            if (h > maxTxtH) maxTxtH = h;
+          });
+          const rh = Math.max(rhMin, maxTxtH + 2 * padY);
+          checar(rh);
+          const ry = y;
+          doc.save().rect(ML, ry, cw, rh).fill(C.cinzaH)
+             .rect(ML + 2 * cw, ry, cw, rh).fill(C.cinzaH).restore();
+          doc.save().strokeColor('#AAAAAA').lineWidth(0.4).rect(ML, ry, TW, rh).stroke().restore();
+          doc.fillColor(C.preto).font(FONT_B).fontSize(9)
+             .text(pairs[i][0], ML + padX, ry + padY, { width: cw - 2 * padX });
+          doc.font(FONT)
+             .text(pairs[i][1] || '—', ML + cw + padX, ry + padY, { width: cw - 2 * padX });
+          if (pairs[i + 1]) {
+            doc.font(FONT_B)
+               .text(pairs[i + 1][0], ML + 2 * cw + padX, ry + padY, { width: cw - 2 * padX });
+            doc.font(FONT)
+               .text(pairs[i + 1][1] || '—', ML + 3 * cw + padX, ry + padY, { width: cw - 2 * padX });
+          }
+          y += rh;
+        }
+      };
+
+      const paragrafo = (txt: string, gap = 4) => {
+        doc.font(FONT).fontSize(9).fillColor(C.preto);
+        const h = doc.heightOfString(txt, { width: TW, align: 'justify', lineGap: 1 });
+        checar(h + gap);
+        doc.text(txt, ML, y, { width: TW, align: 'justify', lineGap: 1 });
+        y += h + gap;
+      };
+
+      // ════════════════════════════════════════════════════════════════════
+      novaPage();
+
+      // Título
+      doc.font(FONT_B).fontSize(13).fillColor(C.azul)
+         .text('ANOTAÇÃO NO LIVRO DE REGISTRO DE SEGURANÇA', ML, y, { width: TW, align: 'center' });
+      y += 18;
+      doc.font(FONT_B).fontSize(11).fillColor(C.laranja)
+         .text(`${rotuloTipo} CONFORME NR-13`, ML, y, { width: TW, align: 'center' });
+      y += 16;
+
+      // Texto de abertura (espelha o modelo INFRUTAS, adaptado por tipo)
+      const capacidadeTxt = ehCaldeira
+        ? (eq.capacidade_termica ? `com capacidade de produção de ${fn(eq.capacidade_termica, 0)} kg.v/h, ` : '')
+        : (eq.volume ? `com volume de ${fn(eq.volume, 3)} m³, ` : '');
+      const finalidade = ehCaldeira ? 'destinada à produção de vapor' : `destinado ao armazenamento/processo de ${eq.fluido || 'fluido'}`;
+
+      paragrafo(
+        `Foi realizada em ${fdt(dtInsp)} a inspeção de segurança do tipo ${String(tipoInsp).toLowerCase()} ` +
+        `em ${ehCaldeira ? 'caldeira' : 'vaso de pressão'}, ${eq.fabricante || ''}${eq.serie ? `, modelo ${eq.serie}` : ''}, ` +
+        `TAG ${eq.tag}${eq.serie ? ` e número de ordem ${eq.serie}` : ''}, ${finalidade}, ${capacidadeTxt}` +
+        `instalado(a) na ${eq.cli_nome}, localizada em ${endereco}. A inspeção foi conduzida de acordo com a ` +
+        `Norma Regulamentadora NR-13 (Portaria MT nº 1.082, de 18/12/2018) e seu resultado foi considerado ` +
+        `${resultado.toLowerCase()}, sendo necessária nova inspeção de segurança nos prazos descritos abaixo ou ` +
+        `quando ocorrer qualquer avaria que possa comprometer a segurança do equipamento.`,
+      );
+      y += 2;
+
+      // Identificação do equipamento
+      secao('Identificação do Equipamento');
+      kvRow([
+        ['Equipamento:', rotuloTipo],
+        ['TAG:', eq.tag],
+        ['Fabricante:', eq.fabricante || '—'],
+        ['Nº de ordem/série:', eq.serie || '—'],
+        ['Ano de fabricação:', String(eq.ano || '—')],
+        ['Código de projeto:', eq.codigo_projeto || '—'],
+        ...especificas,
+      ]);
+      y += 3;
+
+      // Empresa / local
+      secao('Estabelecimento');
+      kvRow([
+        ['Empresa:', eq.cli_nome || '—'],
+        ['CNPJ:', eq.cnpj || '—'],
+        ['Endereço:', endereco],
+        ['Responsável:', eq.responsavel || '—'],
+      ]);
+      y += 3;
+
+      // Inspeção e prazos
+      secao('Inspeção Realizada e Próximos Prazos');
+      kvRow([
+        ['Relatório vinculado:', `Nº ${numRel}`],
+        ['Data da inspeção:', fdt(dtInsp)],
+        ['Tipo de inspeção:', String(tipoInsp)],
+        ['Resultado:', insp?.resultado || 'Satisfatório'],
+        ['Exame externo (próx.):', fdt(proxExt)],
+        ['Exame interno (próx.):', fdt(proxInt)],
+        ['Teste hidrostático/ME:', ehCaldeira && !proxHid ? 'A critério do PLH' : fdt(proxHid)],
+        ['ART (CREA-AM):', art],
+      ]);
+      y += 6;
+
+      if (ehCaldeira) {
+        doc.font(FONT_O).fontSize(8).fillColor(C.cinzaT)
+           .text('Observação: para caldeiras, o exame interno e o exame externo constituem a inspeção periódica ' +
+                 'conjunta (NR-13 13.4.4.4). O teste hidrostático não possui periodicidade fixa, sendo realizado ' +
+                 'a critério do Profissional Legalmente Habilitado.',
+                 ML, y, { width: TW, align: 'justify' });
+        y += 26;
+      }
+
+      // Assinatura — mantém o bloco inteiro junto (espaço p/ carimbo + linha + nome + cargo).
+      // Bloco real: ESPACO_ASSINATURA + linha + ~26pt de textos.
+      const ESPACO_ASSINATURA = 42; // área em branco acima da linha p/ assinatura manuscrita ou carimbo
+      const ALTURA_BLOCO = ESPACO_ASSINATURA + 32; // espaço + linha + nome + cargo
+      if (y + ALTURA_BLOCO > CONTENT_BOTTOM) novaPage();
+      else y += 10;
+      y += ESPACO_ASSINATURA; // reserva o espaço em branco para assinatura/carimbo
+      doc.strokeColor(C.preto).lineWidth(0.8)
+         .moveTo(ML + TW / 2 - 110, y).lineTo(ML + TW / 2 + 110, y).stroke();
+      y += 6;
+      doc.font(FONT_B).fontSize(10).fillColor(C.preto)
+         .text(phNome, ML, y, { width: TW, align: 'center' });
+      y += 14;
+      doc.font(FONT).fontSize(9).fillColor(C.cinzaT)
+         .text(`Engenheiro Mecânico  |  CREA-AM ${phCrea}`, ML, y, { width: TW, align: 'center' });
+
+      doc.end();
+    });
+  }
 }

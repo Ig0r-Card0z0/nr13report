@@ -25,4 +25,27 @@ export class RelatoriosController {
 
     res.end(buffer);
   }
+
+  @Get('livro/:equipamentoId')
+  async gerarAnotacaoLivro(
+    @Param('equipamentoId') equipamentoId: string,
+    @Query('download') download: string,
+    @Query('inspecaoId') inspecaoId: string,
+    @Res() res: Response,
+  ) {
+    const buffer = await this.relatoriosService.gerarAnotacaoLivro(
+      equipamentoId,
+      inspecaoId || undefined,
+    );
+
+    const isDownload = download === '1' || download === 'true';
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `${isDownload ? 'attachment' : 'inline'}; filename="anotacao-livro-${equipamentoId}.pdf"`,
+      'Content-Length': buffer.length,
+      'Cache-Control': 'no-cache',
+    });
+
+    res.end(buffer);
+  }
 }

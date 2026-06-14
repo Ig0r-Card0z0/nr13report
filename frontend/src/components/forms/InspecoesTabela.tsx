@@ -13,7 +13,7 @@ import { EditorResultadoInspecao, Overrides } from './EditorResultadoInspecao';
 import {
   ChevronDown, ChevronRight, Trash2, FileText, Image as ImageIcon,
   Activity, Download, AlertTriangle, Check, Eye, X, Paperclip, Upload, Pencil, FileType,
-  SlidersHorizontal,
+  SlidersHorizontal, BookOpen,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
@@ -133,6 +133,9 @@ function RowGroup({
   const qtdOverrides = Object.keys(overrides).length;
   const pdfHref = relatoriosApi.urlPDFInspecaoDownload(equipamentoId, ins.id, overrides);
   const docxHref = relatoriosApi.urlDOCXInspecaoDownload(equipamentoId, ins.id, overrides);
+  const livroHref = relatoriosApi.urlLivroInspecaoDownload(equipamentoId, ins.id);
+  const livroPreview = relatoriosApi.urlLivroInspecao(equipamentoId, ins.id);
+  const ehCaldeira = /caldeira/i.test(String(equipamento.tipo || ''));
   const [docTab, setDocTab] = useState<'fotos' | 'ultrassom' | 'pdf' | 'seguranca' | 'resultado'>('fotos');
   const [anexosSeg, setAnexosSeg] = useState<AnexoSeguranca[]>([]);
   const [loadingSeg, setLoadingSeg] = useState(false);
@@ -388,6 +391,41 @@ function RowGroup({
                             className="w-full h-[70vh]"
                             title="Pré-visualização do relatório PDF"
                           />
+                        </div>
+
+                        {/* Anotação no Livro de Registro (NR-13) — adapta-se ao tipo */}
+                        <div className="mt-4 border border-gray-200 rounded-lg p-4 bg-white">
+                          <div className="flex items-start gap-3 flex-wrap">
+                            <BookOpen size={20} className="text-primary-700 mt-0.5 flex-shrink-0" />
+                            <div className="min-w-0 flex-1">
+                              <div className="text-sm font-semibold text-gray-900">
+                                Anotação no Livro de Registro de Segurança
+                              </div>
+                              <div className="text-xs text-gray-500 mt-0.5">
+                                Documento sintético conforme NR-13
+                                {ehCaldeira ? ' (modelo de caldeira)' : ' (modelo de vaso de pressão)'} —
+                                identificação do equipamento, inspeção realizada, prazos e ART.
+                              </div>
+                              <div className="flex items-center gap-3 flex-wrap mt-3">
+                                <a
+                                  href={livroPreview}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="btn btn-sm"
+                                >
+                                  <Eye size={12} /> Visualizar prévia
+                                </a>
+                                <a
+                                  href={livroHref}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="btn btn-sm btn-primary"
+                                >
+                                  <Download size={12} /> Gerar e baixar
+                                </a>
+                              </div>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     ) : (
