@@ -156,6 +156,14 @@ export const relatoriosApi = {
   urlDOCXDownload: (equipamentoId: string) => `/api/relatorios/docx/${equipamentoId}?download=1`,
   urlDOCXInspecaoDownload: (equipamentoId: string, inspecaoId: string, ov?: Record<string, string> | null) =>
     `/api/relatorios/docx/${equipamentoId}?download=1&inspecaoId=${encodeURIComponent(inspecaoId)}${qsOverrides(ov)}`,
+
+  // Anotação no Livro de Registro (NR-13) — adapta-se a caldeira ou vaso
+  urlLivro: (equipamentoId: string) => `/api/relatorios/livro/${equipamentoId}`,
+  urlLivroDownload: (equipamentoId: string) => `/api/relatorios/livro/${equipamentoId}?download=1`,
+  urlLivroInspecao: (equipamentoId: string, inspecaoId: string) =>
+    `/api/relatorios/livro/${equipamentoId}?inspecaoId=${encodeURIComponent(inspecaoId)}`,
+  urlLivroInspecaoDownload: (equipamentoId: string, inspecaoId: string) =>
+    `/api/relatorios/livro/${equipamentoId}?download=1&inspecaoId=${encodeURIComponent(inspecaoId)}`,
 };
 
 // ── Health ────────────────────────────────────────────
