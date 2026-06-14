@@ -1676,10 +1676,13 @@ export class RelatoriosService {
         y += 26;
       }
 
-      // Assinatura — mantém o bloco inteiro junto (linha + nome + cargo).
-      // Reserva 84pt; se não couber, joga tudo para a próxima página de uma vez.
-      if (y + 70 > CONTENT_BOTTOM) novaPage();
-      else y += 12;
+      // Assinatura — mantém o bloco inteiro junto (espaço p/ carimbo + linha + nome + cargo).
+      // Bloco real: ESPACO_ASSINATURA + linha + ~26pt de textos.
+      const ESPACO_ASSINATURA = 42; // área em branco acima da linha p/ assinatura manuscrita ou carimbo
+      const ALTURA_BLOCO = ESPACO_ASSINATURA + 32; // espaço + linha + nome + cargo
+      if (y + ALTURA_BLOCO > CONTENT_BOTTOM) novaPage();
+      else y += 10;
+      y += ESPACO_ASSINATURA; // reserva o espaço em branco para assinatura/carimbo
       doc.strokeColor(C.preto).lineWidth(0.8)
          .moveTo(ML + TW / 2 - 110, y).lineTo(ML + TW / 2 + 110, y).stroke();
       y += 6;
