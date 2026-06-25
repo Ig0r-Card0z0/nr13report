@@ -116,6 +116,36 @@ function fn(v: any, dec = 2): string {
 export class RelatoriosService {
   constructor(private readonly db: DatabaseService) {}
 
+  /**
+   * Tag bruta do equipamento, sem sanitização. Usada no Content-Disposition
+   * estendido (filename*=UTF-8'') para preservar acentos.
+   * Retorna `null` quando o equipamento não existe ou está sem tag.
+   */
+  getEquipamentoTag(equipamentoId: string): string | null {
+    const row = this.db.instance
+      .prepare('SELECT tag FROM equipamentos WHERE id = ?')
+      .get(equipamentoId) as { tag?: string } | undefined;
+    return row?.tag?.trim() || null;
+  }
+
+  /**
+   * Tag do equipamento normalizada para uso em nome de arquivo:
+   * tira acentos, troca caracteres inválidos por `_`, colapsa repetições.
+   * Usado como filename ASCII puro (fallback para clientes antigos).
+   */
+  getEquipamentoFilenameSlug(equipamentoId: string): string | null {
+    const tag = this.getEquipamentoTag(equipamentoId);
+    if (!tag) return null;
+    // Remove acentos (NFD: separa marcas combinantes U+0300..U+036F e tira-as)
+    // e mantém só caracteres seguros em nome de arquivo.
+    const slug = tag
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/[^A-Za-z0-9._-]+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^[._-]+|[._-]+$/g, '');
+    return slug || null;
+  }
+
   async gerarPDF(equipamentoId: string, inspecaoId?: string): Promise<Buffer> {
     // ── 1. Carregar dados do banco (better-sqlite3 é síncrono) ───────────────
     const db = this.db.instance;
