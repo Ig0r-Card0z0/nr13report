@@ -6,6 +6,56 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { PDFDocument as PDFLibDocument } from 'pdf-lib';
 import sharp from 'sharp';
+import {
+  calcularPrazosNR13, calcularPrazosCaldeira, isCaldeira,
+  PERIODICIDADE_SEM_SPIE, PERIODICIDADE_COM_SPIE,
+  periodicidadeCaldeiraMeses, CategoriaVaso, CategoriaCaldeira,
+} from '../../common/nr13';
+
+/**
+ * Periodicidade legal NR-13 para a seção 5.1, derivada da especificação do
+ * equipamento. Centraliza a lógica usada pelo PDF e pelo DOCX para evitar
+ * strings hardcoded como "5 anos / 10 anos / 20 anos".
+ */
+function prazos51FromEquipamento(eq: any): {
+  rotuloNr13: { ext: string; int: string; hid: string };
+  defaultRecPh: { ext: string | null; int: string | null; hid: string | null };
+} {
+  const dtInsp = eq.dt_ultima_insp || new Date().toISOString().slice(0, 10);
+  const ehCald = isCaldeira(eq.tipo);
+  const comSpie = !!eq.com_spie;
+  if (ehCald) {
+    const cat = String(eq.categoria || '').toUpperCase() as CategoriaCaldeira;
+    if (['A', 'B', 'C'].includes(cat)) {
+      const opts = { comSpie, valvulasTestadas12m: !!eq.valvulas_testadas_12m };
+      const meses = periodicidadeCaldeiraMeses(cat, opts);
+      const calc = calcularPrazosCaldeira(cat, dtInsp, opts);
+      const r = `${meses} meses`;
+      return {
+        rotuloNr13: { ext: r, int: r, hid: 'A critério do PLH' },
+        defaultRecPh: { ext: calc.prox_externo, int: calc.prox_interno, hid: null },
+      };
+    }
+  }
+  const cat = String(eq.categoria || '').toUpperCase() as CategoriaVaso;
+  const tabela = comSpie ? PERIODICIDADE_COM_SPIE : PERIODICIDADE_SEM_SPIE;
+  const cfg = tabela[cat];
+  const anos = (y: number | undefined) =>
+    !y || y <= 0 ? 'A critério' : `${y} ${y === 1 ? 'ano' : 'anos'}`;
+  const calc = calcularPrazosNR13(cat, dtInsp, comSpie);
+  return {
+    rotuloNr13: {
+      ext: anos(cfg?.ext),
+      int: anos(cfg?.int),
+      hid: anos(cfg?.hid),
+    },
+    defaultRecPh: {
+      ext: calc.prox_externo,
+      int: calc.prox_interno,
+      hid: calc.prox_hidro,
+    },
+  };
+}
 
 type FotoPrep = {
   buffer: Buffer | null;
@@ -875,8 +925,26 @@ export class RelatoriosService {
       // ══════════════════════════════════════════════════════════════════════
       checar(200);
       secao('5.1 – PRÓXIMAS INSPEÇÕES PERIÓDICAS A SEREM REALIZADAS');
-      texto('Conforme 13.4.4.4(a) a Inspeção Periódica com Exame Externo e Exame Interno, ' +
-            'deve ser realizada no máximo em 12 meses.', 4);
+      // Prazos derivados da especificação do equipamento (categoria + SPIE),
+      // mesma fonte usada pelo formulário de inspeção (common/nr13.ts).
+      const prazos51 = prazos51FromEquipamento(eq);
+      // Nota normativa coerente com o TIPO do equipamento:
+      // - Caldeira: regra 13.4.4.4 (interno e externo em conjunto, em meses).
+      // - Vaso de pressão: Anexo IV — Tabela 1 (em anos, por categoria).
+      if (ehCaldeira) {
+        texto(
+          'Conforme NR-13 item 13.4.4.4, a Inspeção Periódica de caldeira é constituída ' +
+          'pelos exames externo e interno realizados em conjunto, no prazo máximo definido ' +
+          'em função da categoria e do regime SPIE. O teste hidrostático não possui ' +
+          'periodicidade fixa, sendo realizado a critério do PLH.', 4,
+        );
+      } else {
+        texto(
+          'Conforme NR-13 Anexo IV (Tabela 1), os exames externo, interno e o teste ' +
+          'hidrostático possuem periodicidades máximas distintas, em anos, conforme a ' +
+          'categoria do vaso e o regime SPIE.', 4,
+        );
+      }
 
       // Tabela de prazos
       const prxCws = [TW * 0.28, TW * 0.18, TW * 0.18, TW * 0.36];
@@ -894,10 +962,15 @@ export class RelatoriosService {
       });
       y += rh18;
 
+      // "Recom. PH": prazo padrão calculado a partir da especificação do equipamento.
+      // Quando a inspeção atual define uma data específica, ela prevalece.
+      const recExt = insp?.prox_externo || prazos51.defaultRecPh.ext;
+      const recInt = insp?.prox_interno || prazos51.defaultRecPh.int;
+      const recHid = insp?.prox_hidro   || prazos51.defaultRecPh.hid;
       const prxData = [
-        ['Exame Externo',    '5 anos',  '1 ano',   fdt(insp?.prox_externo || eq.prox_externo || '')],
-        ['Exame Interno',    '10 anos', '5 anos',  fdt(insp?.prox_interno || eq.prox_interno || '')],
-        ['Teste Hidrostático', '20 anos', '10 anos', fdt(eq.prox_hidro || '')],
+        ['Exame Externo',      prazos51.rotuloNr13.ext, fdt(recExt), fdt(eq.prox_externo || '')],
+        ['Exame Interno',      prazos51.rotuloNr13.int, fdt(recInt), fdt(eq.prox_interno || '')],
+        ['Teste Hidrostático', prazos51.rotuloNr13.hid, fdt(recHid), fdt(eq.prox_hidro   || '')],
       ];
       prxData.forEach((row, ri) => {
         checar(rh18);

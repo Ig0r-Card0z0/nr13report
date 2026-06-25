@@ -73,7 +73,11 @@ export function RelatorioPDF({ equipamento: eq, inspecoes, fotos, medicao, inspe
       {/* Painel: Resultado da Inspeção (montado sempre p/ preservar estado) */}
       <div hidden={aba !== 'resultado'}>
         {inspecaoId ? (
-          <EditorResultadoInspecao onChange={setOverrides} />
+          <EditorResultadoInspecao
+            onChange={setOverrides}
+            equipamento={eq}
+            dataInspecao={inspecao?.data?.slice(0, 10)}
+          />
         ) : (
           <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-700 mb-5">
             Selecione uma inspeção específica para ajustar os itens do Resultado

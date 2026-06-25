@@ -336,7 +336,11 @@ function RowGroup({
                 hidden={docTab !== 'resultado'}
               >
                 {/* Mantido montado para preservar estado interno entre trocas de aba. */}
-                <EditorResultadoInspecao onChange={setOverrides} />
+                <EditorResultadoInspecao
+                  onChange={setOverrides}
+                  equipamento={equipamento}
+                  dataInspecao={ins.data?.slice(0, 10)}
+                />
               </div>
 
               <div
