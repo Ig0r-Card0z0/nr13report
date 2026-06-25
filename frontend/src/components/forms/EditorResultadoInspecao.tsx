@@ -24,6 +24,13 @@
 
 import { useMemo, useState } from 'react';
 import { Tabs } from '@/components/ui/Tabs';
+import { Equipamento } from '@/types';
+import {
+  calcularPrazosNR13, calcularPrazosCaldeira, isCaldeira,
+  PERIODICIDADE_SEM_SPIE, PERIODICIDADE_COM_SPIE,
+  periodicidadeCaldeiraMeses, CategoriaVaso, CategoriaCaldeira,
+} from '@/lib/nr13';
+import { fmtData } from '@/lib/utils';
 
 // ── Tipos ───────────────────────────────────────────────────────────────────
 export type ResultadoItem = 'sim' | 'nao';
@@ -106,12 +113,84 @@ const TIPOS_INSPECAO: { valor: TipoInspecaoMarcado; rotulo: string }[] = [
 // ── Props ───────────────────────────────────────────────────────────────────
 interface Props {
   onChange: (ov: Overrides) => void;
+  /** Equipamento — usado para calcular os defaults NR-13 da seção 5.1. */
+  equipamento?: Pick<
+    Equipamento,
+    'tipo' | 'categoria' | 'com_spie' | 'valvulas_testadas_12m'
+  >;
+  /** Data da inspeção (YYYY-MM-DD) — base para somar a periodicidade NR-13. */
+  dataInspecao?: string;
+}
+
+// ── Helpers de cálculo dos defaults da seção 5.1 ────────────────────────────
+interface DefaultsPrazo51 {
+  /** Datas ISO calculadas (mesma fonte do InspecaoForm). */
+  proxExterno: string | null;
+  proxInterno: string | null;
+  proxHidro: string | null;
+  /** Rótulo curto da periodicidade legal por linha (ex.: "3 anos", "12 meses"). */
+  rotulo: { ext: string; int: string; hid: string };
+  /** Descrição-resumo para a legenda da seção. */
+  descricao: string;
+}
+
+function calcularDefaults51(
+  eq: Props['equipamento'],
+  dataInspecao?: string,
+): DefaultsPrazo51 | null {
+  if (!eq?.categoria || !dataInspecao) return null;
+  const ehCald = isCaldeira(eq.tipo);
+  const comSpie = !!eq.com_spie;
+
+  if (ehCald) {
+    const cat = String(eq.categoria).toUpperCase() as CategoriaCaldeira;
+    if (!['A', 'B', 'C'].includes(cat)) return null;
+    const opts = {
+      comSpie,
+      valvulasTestadas12m: !!eq.valvulas_testadas_12m,
+    };
+    const meses = periodicidadeCaldeiraMeses(cat, opts);
+    const prazos = calcularPrazosCaldeira(cat, dataInspecao, opts);
+    const rotulo = `${meses} meses`;
+    return {
+      ...prazos,
+      rotulo: { ext: rotulo, int: rotulo, hid: 'A critério do PLH' },
+      descricao:
+        `Caldeira categoria ${cat}${comSpie ? ' com SPIE' : ' sem SPIE'} — ` +
+        `exames externo e interno conjuntos em até ${rotulo}; ` +
+        `teste hidrostático a critério do PLH.`,
+    };
+  }
+
+  const cat = String(eq.categoria).toUpperCase() as CategoriaVaso;
+  const tabela = comSpie ? PERIODICIDADE_COM_SPIE : PERIODICIDADE_SEM_SPIE;
+  const cfg = tabela[cat];
+  if (!cfg) return null;
+  const prazos = calcularPrazosNR13(cat, dataInspecao, comSpie);
+  const anos = (y: number) =>
+    y <= 0 ? 'A critério' : `${y} ${y === 1 ? 'ano' : 'anos'}`;
+  return {
+    ...prazos,
+    rotulo: { ext: anos(cfg.ext), int: anos(cfg.int), hid: anos(cfg.hid) },
+    descricao:
+      `Vaso categoria ${cat}${comSpie ? ' com SPIE' : ' sem SPIE'} — ` +
+      `externo em ${anos(cfg.ext)}, interno em ${anos(cfg.int)}, ` +
+      `hidrostático em ${anos(cfg.hid)}.`,
+  };
 }
 
 // ── Componente ──────────────────────────────────────────────────────────────
-export function EditorResultadoInspecao({ onChange }: Props) {
+export function EditorResultadoInspecao({ onChange, equipamento, dataInspecao }: Props) {
   const [editados, setEditados] = useState<Overrides>({});
   const [abaAtiva, setAbaAtiva] = useState<string>('4.1');
+
+  // Defaults da seção 5.1 derivados do equipamento (mesma fonte do InspecaoForm).
+  const defaults51 = useMemo(
+    () => calcularDefaults51(equipamento, dataInspecao),
+    [equipamento?.tipo, equipamento?.categoria,
+     equipamento?.com_spie, equipamento?.valvulas_testadas_12m,
+     dataInspecao],
+  );
 
   const totalEditaveis = useMemo(
     () => SUB_ABAS.reduce((s, sa) => s + sa.itens.length, 0) + 1 + DATAS_51.length, // +1 = tipo conclusão
@@ -224,6 +303,7 @@ export function EditorResultadoInspecao({ onChange }: Props) {
           <ListaDatas51
             editados={editados}
             onSetData={setData}
+            defaults={defaults51}
           />
         )}
       </div>
@@ -337,23 +417,33 @@ function ListaItensChecklist({
 
 // ── Lista de datas 5.1 (date pickers) ───────────────────────────────────────
 function ListaDatas51({
-  editados, onSetData,
+  editados, onSetData, defaults,
 }: {
   editados: Overrides;
   onSetData: (chave: string, isoDate: string) => void;
+  defaults: DefaultsPrazo51 | null;
 }) {
+  const defaultPorChave: Record<string, string | null> = {
+    'prox.externo.recph': defaults?.proxExterno ?? null,
+    'prox.interno.recph': defaults?.proxInterno ?? null,
+    'prox.hidro.recph':   defaults?.proxHidro   ?? null,
+  };
+
   return (
     <div className="space-y-2">
       <div className="text-xs text-gray-500 mb-2">
         Preencha a data recomendada pelo PH para sobrescrever a coluna
         <strong> &quot;Recom. PH&quot;</strong> da tabela 5.1. Deixe em branco
-        para manter o período padrão da NR-13 (1 ano / 5 anos / 10 anos).
-        Demais colunas (NR-13 e Data máx.) permanecem calculadas automaticamente
-        pela categoria do equipamento.
+        para manter o prazo padrão da NR-13 calculado a partir da{' '}
+        <strong>especificação do equipamento</strong> (categoria, tipo e SPIE).
+        {defaults
+          ? <> {defaults.descricao}</>
+          : <> Defina categoria do equipamento e data da inspeção para que o prazo padrão apareça aqui.</>}
       </div>
       {DATAS_51.map(item => {
         const valor = (editados[item.chave] as string | undefined) || '';
         const liberado = !!valor;
+        const padrao = defaultPorChave[item.chave];
         return (
           <div
             key={item.chave}
@@ -382,11 +472,15 @@ function ListaDatas51({
                       onClick={() => onSetData(item.chave, '')}
                       className="text-xs text-primary-700 hover:underline"
                     >
-                      Usar default
+                      Usar padrão
                     </button>
+                  ) : padrao ? (
+                    <span className="text-xs text-gray-500 italic">
+                      padrão NR-13: <span className="font-medium text-gray-700">{fmtData(padrao)}</span>
+                    </span>
                   ) : (
-                    <span className="text-xs text-gray-400 italic">
-                      usando período padrão NR-13
+                    <span className="text-xs text-amber-600 italic">
+                      padrão NR-13 indisponível (verifique categoria/data)
                     </span>
                   )}
                 </div>
